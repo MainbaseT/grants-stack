@@ -1,8 +1,20 @@
 import { useCartStorage } from "./store";
-import { ChainId, VotingToken } from "common";
+import { TToken, getTokens } from "common";
 import { CartProject } from "./features/api/types";
 import { makeApprovedProjectData } from "./test-utils";
-import { votingTokensMap } from "./features/api/utils";
+
+const defaultVotingTokens: Record<number, TToken> = Object.entries(
+  getTokens()
+).reduce(
+  (acc, [chainId, tokens]) => {
+    const votingToken = tokens.find((token) => token.canVote);
+    if (votingToken) {
+      acc[Number(chainId) as number] = votingToken;
+    }
+    return acc;
+  },
+  {} as Record<number, TToken>
+);
 
 describe("useCartStorage Zustand store", () => {
   beforeEach(() => {
@@ -34,7 +46,7 @@ describe("useCartStorage Zustand store", () => {
     const project = makeApprovedProjectData();
 
     useCartStorage.getState().add(project);
-    useCartStorage.getState().remove(project.grantApplicationId);
+    useCartStorage.getState().remove(project);
 
     expect(useCartStorage.getState().projects).not.toContain(project);
   });
@@ -59,7 +71,12 @@ describe("useCartStorage Zustand store", () => {
     useCartStorage.getState().add(project);
     useCartStorage
       .getState()
-      .updateDonationAmount(project.grantApplicationId, updatedAmount);
+      .updateDonationAmount(
+        project.chainId,
+        project.roundId,
+        project.grantApplicationId,
+        updatedAmount
+      );
 
     const updatedProject = useCartStorage
       .getState()
@@ -70,8 +87,8 @@ describe("useCartStorage Zustand store", () => {
   });
 
   test("should set payout token for a specific chain", () => {
-    const chainId: ChainId = ChainId.MAINNET; // Mock ChainId
-    const payoutToken: VotingToken = votingTokensMap[ChainId.MAINNET][0];
+    const chainId = 1;
+    const payoutToken: TToken = defaultVotingTokens[1];
 
     useCartStorage.getState().setVotingTokenForChain(chainId, payoutToken);
 
@@ -97,7 +114,7 @@ describe("useCartStorage Zustand store", () => {
   });
 
   test("should update donations for all projects with a specific chain", () => {
-    const chainId: ChainId = ChainId.MAINNET; // Mock ChainId
+    const chainId = 1;
 
     const project1: CartProject = makeApprovedProjectData();
     const project2: CartProject = makeApprovedProjectData();
@@ -120,16 +137,18 @@ describe("useCartStorage Zustand store", () => {
     const nonExistingId = "1234"; // Mock ID
     const initialProjects = [...useCartStorage.getState().projects];
 
-    useCartStorage.getState().updateDonationAmount(nonExistingId, "500");
+    useCartStorage
+      .getState()
+      .updateDonationAmount(1, "1", nonExistingId, "500");
 
     // Assert that the store state remains unchanged
     expect(useCartStorage.getState().projects).toEqual(initialProjects);
   });
 
   test("should override voting token for a specific chain", () => {
-    const chainId: ChainId = ChainId.MAINNET; // Mock ChainId
-    const initialVotingToken: VotingToken = votingTokensMap[ChainId.MAINNET][0];
-    const newVotingToken: VotingToken = votingTokensMap[ChainId.MAINNET][1];
+    const chainId = 1;
+    const initialVotingToken: TToken = defaultVotingTokens[1];
+    const newVotingToken: TToken = defaultVotingTokens[1];
 
     useCartStorage
       .getState()
@@ -142,10 +161,12 @@ describe("useCartStorage Zustand store", () => {
   });
 
   test("should handle removal of non-existing project gracefully", () => {
-    const nonExistingId = "1234"; // Mock ID
     const initialProjects = [...useCartStorage.getState().projects];
+    const nonExistingId = "1234"; // Mock ID
+    const nonExistingProject: CartProject = makeApprovedProjectData();
+    nonExistingProject.grantApplicationId = nonExistingId;
 
-    useCartStorage.getState().remove(nonExistingId);
+    useCartStorage.getState().remove(nonExistingProject);
 
     // Assert that the store state remains unchanged
     expect(useCartStorage.getState().projects).toEqual(initialProjects);
@@ -172,7 +193,12 @@ describe("useCartStorage Zustand store", () => {
     useCartStorage.getState().add(project);
     useCartStorage
       .getState()
-      .updateDonationAmount(project.grantApplicationId, "-50");
+      .updateDonationAmount(
+        project.chainId,
+        project.roundId,
+        project.grantApplicationId,
+        "-50"
+      );
 
     // Assuming negative donations are invalid and thus unchanged:
     expect(
@@ -185,8 +211,8 @@ describe("useCartStorage Zustand store", () => {
   });
 
   test("should handle setting payout token for non-existing chain gracefully", () => {
-    const nonExistingChainId = 123123; // Mock a non-existing ChainId
-    const payoutToken: VotingToken = votingTokensMap[ChainId.MAINNET][0];
+    const nonExistingChainId = 123123; // Mock a non-existing number
+    const payoutToken: TToken = defaultVotingTokens[1];
 
     const initialChainToPayoutToken = {
       ...useCartStorage.getState().chainToVotingToken,
@@ -194,7 +220,6 @@ describe("useCartStorage Zustand store", () => {
 
     useCartStorage
       .getState()
-      // @ts-expect-error We purposefully pass a wrong ChainId here
       .setVotingTokenForChain(nonExistingChainId, payoutToken);
 
     // The state should remain unchanged.

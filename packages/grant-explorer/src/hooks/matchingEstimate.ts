@@ -1,6 +1,5 @@
 import useSWRImmutable from "swr/immutable";
-import { Address, zeroAddress } from "viem";
-import { ChainId } from "common";
+import { zeroAddress } from "viem";
 import { getConfig } from "common/src/config";
 
 /* TODO: Rename some of the types to hungarian-style notation once we have shared types between indexer and frontends */
@@ -19,8 +18,8 @@ export type MatchingEstimateResult = {
 };
 
 type UseMatchingEstimatesParams = {
-  roundId: Address;
-  chainId: ChainId;
+  roundId: string;
+  chainId: number;
   potentialVotes: {
     projectId: string;
     roundId: string;
@@ -59,7 +58,7 @@ function getMatchingEstimates(
   }));
 
   return fetch(
-    `${process.env.REACT_APP_ALLO_API_URL}/api/v1/chains/${params.chainId}/rounds/${params.roundId}/estimate`,
+    `${process.env.REACT_APP_INDEXER_V2_API_URL}/api/v1/chains/${params.chainId}/rounds/${params.roundId}/estimate`,
     {
       headers: {
         Accept: "application/json",
@@ -89,6 +88,5 @@ export function matchingEstimatesToText(
     ?.flat()
     .map((est) => est.differenceInUSD ?? 0)
     .filter((diff) => diff > 0)
-    .reduce((acc, b) => acc + b, 0)
-    .toFixed(2);
+    .reduce((acc, b) => acc + b, 0);
 }

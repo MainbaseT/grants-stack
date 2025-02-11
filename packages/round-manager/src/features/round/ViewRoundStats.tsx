@@ -1,20 +1,24 @@
 import { Match } from "allo-indexer-client";
-import { useParams } from "react-router-dom";
+import { getPayoutTokens, getUTCDate } from "common";
+import { getConfig } from "common/src/config";
 import { utils } from "ethers";
 import { useMemo } from "react";
+import { useParams } from "react-router-dom";
+import { useChainId } from "wagmi";
 import {
   useRound,
   useRoundApplications,
   useRoundMatchingFunds,
 } from "../../hooks";
-import { getUTCDate } from "common";
-import { useChainId } from "wagmi";
-import { payoutTokens } from "../api/payoutTokens";
 
 export default function ViewRoundStats() {
   const { id } = useParams();
   const chainId = useChainId();
-  const roundId = utils.getAddress(id?.toLowerCase() ?? "");
+  const alloVersion = getConfig().allo.version;
+  const roundId =
+    alloVersion === "allo-v1"
+      ? utils.getAddress(id?.toLowerCase() ?? "")
+      : (id as string);
 
   const { data: round } = useRound(roundId);
   const { data: applications } = useRoundApplications(roundId);
@@ -26,11 +30,12 @@ export default function ViewRoundStats() {
   const { data: matches } = useRoundMatchingFunds(roundId);
   const matchToken =
     round &&
-    payoutTokens.find(
-      (t) =>
-        t.address.toLowerCase() == round.token.toLowerCase() &&
-        t.chainId === chainId
+    getPayoutTokens(chainId).find(
+      (t) => t.address.toLowerCase() == round.token.toLowerCase()
     );
+
+  // check if the round is on Avalanche to prevent matching stats from being displayed
+  const isAvaxRound: boolean = chainId === 43114 || chainId === 43113;
 
   return (
     <div className="flex flex-center flex-col mx-auto mt-3 mb-[212px]">
@@ -52,8 +57,8 @@ export default function ViewRoundStats() {
             round &&
             `${utils.formatUnits(
               round.matchAmount,
-              matchToken?.decimal
-            )} ${matchToken?.name}`
+              matchToken?.decimals
+            )} ${matchToken?.code}`
           }
           title={"Matching Funds Available"}
         />
@@ -96,30 +101,32 @@ export default function ViewRoundStats() {
                 </th>
               </tr>
             </thead>
-            <tbody>
-              {round &&
-                matches &&
-                matches.map((match: Match) => {
-                  const percentage =
-                    Number(
-                      (BigInt(1000000) * match.matched) / round.matchAmount
-                    ) / 10000;
+            {!isAvaxRound && (
+              <tbody>
+                {round &&
+                  matches &&
+                  matches.map((match: Match) => {
+                    const percentage =
+                      Number(
+                        (BigInt(1000000) * match.matched) / round.matchAmount
+                      ) / 10000;
 
-                  return (
-                    <tr key={match.applicationId}>
-                      <td className="text-sm leading-5 text-gray-400 text-left">
-                        {match.projectName}
-                      </td>
-                      <td className="text-sm leading-5 text-gray-400 text-left">
-                        {match.contributionsCount}
-                      </td>
-                      <td className="text-sm leading-5 text-gray-400 text-left">
-                        {percentage.toString()}%
-                      </td>
-                    </tr>
-                  );
-                })}
-            </tbody>
+                    return (
+                      <tr key={match.applicationId}>
+                        <td className="text-sm leading-5 text-gray-400 text-left">
+                          {match.projectName}
+                        </td>
+                        <td className="text-sm leading-5 text-gray-400 text-left">
+                          {match.contributionsCount}
+                        </td>
+                        <td className="text-sm leading-5 text-gray-400 text-left">
+                          {percentage.toString()}%
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            )}
           </table>
         </div>
         <div className="col-span-1 row-span-2 grid gap-y-6">

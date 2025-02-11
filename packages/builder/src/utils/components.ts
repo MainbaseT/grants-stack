@@ -1,6 +1,7 @@
+import { isInfiniteDate } from "common";
 import { getConfig } from "common/src/config";
+import PinataClient from "common/src/services/pinata";
 import { DefaultProjectBanner, DefaultProjectLogo } from "../assets";
-import PinataClient from "../services/pinata";
 import { Metadata, Project } from "../types";
 
 export enum ImgTypes {
@@ -52,15 +53,35 @@ export const formatDateFromSecs = (ts: number) => {
   });
 };
 
+export const formatDate = (date: string) =>
+  new Date(date).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+
 export const formatTimeUTC = (ts: number) => {
   const date = new Date(ts * 1000);
   return date.toUTCString().replace("GMT", "UTC");
 };
 
+export const formatTimeLocal = (ts: number) => {
+  const date = new Date(ts * 1000);
+  return date.toLocaleString("en-US", {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  });
+};
+
 export const formatDateFromString = (ts: string) =>
   new Date(ts).toLocaleDateString();
 
-export const isInfinite = (number: Number) =>
-  number === Number.MAX_SAFE_INTEGER || !number;
+export const isInfinite = (number: Number): boolean =>
+  isInfiniteDate(new Date(number.toString()));
 
 export const formatDateAsNumber = (ts: string) => Date.parse(ts) / 1000;

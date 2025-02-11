@@ -1,13 +1,14 @@
-/**
+ /**
  * Supported EVM networks
  */
 import { Signer } from "@ethersproject/abstract-signer";
 import { Web3Provider } from "@ethersproject/providers";
 import { VerifiableCredential } from "@gitcoinco/passport-sdk-types";
-import { BigNumber } from "ethers";
-import { SchemaQuestion } from "./utils";
 import { RoundVisibilityType } from "common";
+import { BigNumber } from "ethers";
 import { Address } from "viem";
+import { SchemaQuestion } from "./utils";
+import { AddressAndRole, RoundForManager, SybilDefense } from "data-layer";
 
 export type Network = "optimism" | "fantom" | "pgn";
 
@@ -107,6 +108,11 @@ export interface Program {
     name?: string;
     logo?: string;
   };
+
+  tags?: string[];
+  roles?: AddressAndRole[];
+  qfRoundsCount?: number;
+  dgRoundsCount?: number;
 }
 
 export type InputType =
@@ -142,16 +148,12 @@ export interface ApplicationMetadata {
   requirements: ProjectRequirements;
 }
 
-export enum RoundCategory {
-  QuadraticFunding,
-  Direct,
-}
-
 export interface Round {
+  strategyName: string;
   /**
    * The on-chain unique round ID
    */
-  id?: string;
+  id: string;
 
   chainId?: number;
 
@@ -172,7 +174,7 @@ export interface Round {
       matchingCapAmount?: number;
       minDonationThreshold?: boolean;
       minDonationThresholdAmount?: number;
-      sybilDefense?: boolean;
+      sybilDefense?: SybilDefense;
     };
     support?: {
       type: string;
@@ -242,6 +244,10 @@ export interface Round {
    */
   operatorWallets?: Array<string>;
   /**
+   * List of addresses and their roles in the round
+   */
+  roles?: AddressAndRole[];
+  /**
    * List of projects approved for the round
    */
   approvedProjects?: ApprovedProject[];
@@ -261,6 +267,16 @@ export interface Round {
    * CreatedByAddress
    */
   createdByAddress?: string;
+  strategyAddress?: string;
+
+  tags?: string[];
+  fundedAmount: bigint;
+  fundedAmountInUsd: number;
+  matchAmount: bigint;
+  matchAmountInUsd: number;
+
+  matchingDistribution: RoundForManager["matchingDistribution"];
+  readyForPayoutTransaction: RoundForManager["readyForPayoutTransaction"];
 }
 
 export type MatchingStatsData = {
@@ -271,6 +287,7 @@ export type MatchingStatsData = {
   matchPoolPercentage: number;
   projectId: string;
   applicationId: string;
+  anchorAddress?: string;
   matchAmountInToken: BigNumber;
   originalMatchAmountInToken: BigNumber;
   projectPayoutAddress: string;
@@ -355,6 +372,8 @@ export interface GrantApplication {
   status: ProjectStatus; // handle round status 0,1,2,3
   inReview?: boolean; // handle payoutStatus for DirectStrategy
 
+  // FIXME: this is needed in useApplciationsByRound.tsx because it's mandatory
+  // in the direct payout flow. Why is it optional? can we set it as mandatory?
   projectId?: string;
 
   payoutStrategy?: {
@@ -368,6 +387,8 @@ export interface GrantApplication {
     }[];
   };
 
+  distributionTransaction: string | null;
+
   statusSnapshots?: {
     status: ProjectStatus;
     updatedAt: Date;
@@ -377,6 +398,8 @@ export interface GrantApplication {
    * Index of a grant application
    */
   applicationIndex: number;
+  anchorAddress: string;
+
   /**
    * Created timestamp of a grant application
    */
@@ -452,11 +475,13 @@ export type TransactionBlock = {
   error?: unknown;
 };
 
-export type EditedGroups = {
-  ApplicationMetaPointer: boolean;
-  MatchAmount: boolean;
-  RoundFeeAddress: boolean;
-  RoundFeePercentage: boolean;
-  RoundMetaPointer: boolean;
-  StartAndEndTimes: boolean;
+export type RevisedMatch = {
+  revisedContributionCount: number;
+  revisedMatch: bigint;
+  matched: bigint;
+  contributionsCount: number;
+  projectId: string;
+  applicationId: string;
+  projectName: string;
+  payoutAddress: string;
 };

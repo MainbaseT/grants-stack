@@ -8,11 +8,14 @@ import {
   RoundContext,
   RoundState,
 } from "./context/RoundContext";
-import { __deprecated_RoundMetadata } from "./features/api/round";
 import { CartProject, ProjectMetadata, Round } from "./features/api/types";
-import { parseUnits } from "viem";
-import { ChainId } from "common";
-import { DataLayer, DataLayerProvider, RoundGetRound } from "data-layer";
+import { parseUnits, zeroAddress } from "viem";
+import {
+  DataLayer,
+  DataLayerProvider,
+  RoundGetRound,
+  RoundMetadata,
+} from "data-layer";
 
 export const makeRoundData = (overrides: Partial<Round> = {}): Round => {
   const applicationsStartTime = faker.date.soon();
@@ -43,7 +46,7 @@ export const makeRoundData = (overrides: Partial<Round> = {}): Round => {
         matchingCapAmount: 0,
         minDonationThreshold: false,
         minDonationThresholdAmount: 0,
-        sybilDefense: true,
+        sybilDefense: "passport-mbds",
       },
     },
     store: {
@@ -57,7 +60,8 @@ export const makeRoundData = (overrides: Partial<Round> = {}): Round => {
     token: faker.finance.ethereumAddress(),
     payoutStrategy: {
       id: "some-id",
-      strategyName: "allov1.QF",
+      strategyName:
+        "allov2.DonationVotingMerkleDistributionDirectTransferStrategy",
     },
     votingStrategy: faker.finance.ethereumAddress(),
     ownedBy: faker.finance.ethereumAddress(),
@@ -91,7 +95,7 @@ export const makeApprovedProjectData = (
     status: "APPROVED",
     applicationIndex: faker.datatype.number(),
     roundId: faker.finance.ethereumAddress(),
-    chainId: ChainId.MAINNET,
+    chainId: 1,
     ...overrides,
   };
 };
@@ -100,8 +104,8 @@ const makeTimestamp = (days?: number) =>
   Math.floor(Number(faker.date.soon(days)) / 1000).toString();
 
 export const makeRoundMetadata = (
-  overrides?: Partial<__deprecated_RoundMetadata>
-): __deprecated_RoundMetadata => ({
+  overrides?: Partial<RoundMetadata>
+): RoundMetadata => ({
   name: faker.company.name(),
   roundType: "public",
   eligibility: {
@@ -117,11 +121,11 @@ export const makeRoundMetadata = (
 
 export const makeRoundOverviewData = (
   overrides?: Partial<RoundGetRound>,
-  roundMetadataOverrides?: Partial<__deprecated_RoundMetadata>
+  roundMetadataOverrides?: Partial<RoundMetadata>
 ): RoundGetRound => {
   return {
     id: faker.finance.ethereumAddress(),
-    chainId: ChainId.MAINNET,
+    chainId: 1,
     createdAtBlock: 1,
     roundMetadataCid: generateIpfsCid(),
     applicationsStartTime: makeTimestamp(),
@@ -130,10 +134,11 @@ export const makeRoundOverviewData = (
     donationsEndTime: makeTimestamp(30),
     matchAmountInUsd: 1000000000000000000000000,
     matchAmount: "1000000000000000000000000",
-    matchTokenAddress: faker.finance.ethereumAddress(),
+    matchTokenAddress: zeroAddress,
     roundMetadata: makeRoundMetadata(roundMetadataOverrides),
     applications: Array.from({ length: 2 }).map((_, i) => ({ id: String(i) })),
-    strategyName: "allov1.QF",
+    strategyName:
+      "allov2.DonationVotingMerkleDistributionDirectTransferStrategy",
     strategyAddress: faker.finance.ethereumAddress(),
     strategyId: "",
     tags: [],
@@ -204,13 +209,6 @@ export const renderWithContext = (
           ],
         },
       ]),
-      getLegacyRoundById: vi.fn().mockResolvedValue({
-        round:
-          overrides?.roundState?.rounds !== undefined &&
-          overrides?.roundState?.rounds.length > 0
-            ? overrides?.roundState?.rounds[0]
-            : undefined,
-      }),
     } as unknown as Mocked<DataLayer>);
 
   return render(

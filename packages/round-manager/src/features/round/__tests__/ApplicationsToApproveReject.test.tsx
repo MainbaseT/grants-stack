@@ -25,7 +25,16 @@ jest.mock("common", () => ({
   ...jest.requireActual("common"),
   useAllo: jest.fn(),
 }));
-
+jest.mock("wagmi", () => ({
+  useAccount: () => ({
+    chainId: 1,
+  }),
+  createConfig: jest.fn(),
+}));
+jest.mock("@rainbow-me/rainbowkit", () => ({
+  ConnectButton: jest.fn(),
+  connectorsForWallets: jest.fn(),
+}));
 jest.mock("../../api/application");
 jest.mock("../../common/Auth", () => ({
   useWallet: () => ({

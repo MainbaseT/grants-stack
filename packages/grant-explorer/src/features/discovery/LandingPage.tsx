@@ -15,15 +15,20 @@ import { RoundsGrid } from "./RoundsGrid";
 import LandingHero from "./LandingHero";
 import { LandingSection, ViewAllLink } from "./LandingSection";
 import { toQueryString } from "./RoundsFilter";
+// Note: use during grants rounds or when we figure out how to use all the time.
+import { useCollections } from "../collections/hooks/useCollections";
+import { CollectionsGrid } from "../collections/CollectionsGrid";
 
 const LandingPage = () => {
   const activeRounds = useFilterRounds(
     ACTIVE_ROUNDS_FILTER,
-    getEnabledChains()
+    getEnabledChains(),
+    true
   );
   const roundsEndingSoon = useFilterRounds(
     ROUNDS_ENDING_SOON_FILTER,
-    getEnabledChains()
+    getEnabledChains(),
+    true
   );
 
   const filteredActiveRounds = useMemo(() => {
@@ -37,9 +42,18 @@ const LandingPage = () => {
     );
   }, [roundsEndingSoon.data]);
 
+  const collections = useCollections();
+
   return (
-    <GradientLayout showWalletInteraction>
+    <GradientLayout showWalletInteraction showAlloVersionBanner={false}>
       <LandingHero />
+
+      <LandingSection title="Community collections">
+        {collections.data !== undefined && (
+          <CollectionsGrid data={collections.data} />
+        )}
+      </LandingSection>
+
       <LandingSection
         title="Donate now"
         action={
@@ -69,7 +83,7 @@ const LandingPage = () => {
           <ViewAllLink
             to={`/rounds?${toQueryString({
               orderBy: ROUNDS_ENDING_SOON_FILTER.orderBy,
-              status: RoundStatus.active,
+              status: `${RoundStatus.active},verified`,
             })}`}
           >
             View all

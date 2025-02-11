@@ -1,6 +1,5 @@
-import { useCallback, useState, useRef, useMemo, useEffect } from "react";
-import { useParams } from "react-router-dom";
-import { BigNumber, ethers, utils } from "ethers";
+import { useCallback, useState, useRef, useMemo } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { RadioGroup, Tab } from "@headlessui/react";
 import { ExclamationCircleIcon as NoInformationIcon } from "@heroicons/react/outline";
 import {
@@ -9,47 +8,32 @@ import {
   UploadIcon,
 } from "@heroicons/react/solid";
 import { useDropzone } from "react-dropzone";
-import { classNames } from "common";
+import { classNames, getPayoutTokens, TToken } from "common";
 import { Button } from "common/src/styles";
-import { useDebugMode, useRound, useRoundMatchingFunds } from "../../../hooks";
+import { useDebugMode, useRoundMatchingFunds } from "../../../hooks";
 import {
-  MatchingStatsData,
+  GrantApplication,
   ProgressStatus,
   ProgressStep,
-  Round as GraphRound,
+  Round,
+  RevisedMatch,
 } from "../../api/types";
+import { useMatchCSVParser } from "../../api/utils";
 import { LoadingRing, Spinner } from "../../common/Spinner";
 import { stringify } from "csv-stringify/sync";
 import { Input } from "csv-stringify/lib";
-import { Address, useBalance, useNetwork, useSigner } from "wagmi";
 import InfoModal from "../../common/InfoModal";
 import ProgressModal from "../../common/ProgressModal";
 import ErrorModal from "../../common/ErrorModal";
 import { useFinalizeRound } from "../../../context/round/FinalizeRoundContext";
-import { setReadyForPayout } from "../../api/round";
 import { errorModalDelayMs } from "../../../constants";
 import { useRoundById } from "../../../context/round/RoundContext";
-import { fetchFromIPFS } from "../../api/utils";
 import { roundApplicationsToCSV } from "../../api/exports";
-import { Signer } from "@ethersproject/abstract-signer";
-import { Round } from "allo-indexer-client";
-import {
-  merklePayoutStrategyImplementationContract,
-  roundImplementationContract,
-} from "../../api/contracts";
-import { TransactionResponse } from "@ethersproject/providers";
-import { PayoutToken, payoutTokens } from "../../api/payoutTokens";
-
-type RevisedMatch = {
-  revisedContributionCount: number;
-  revisedMatch: bigint;
-  matched: bigint;
-  contributionsCount: number;
-  projectId: string;
-  applicationId: string;
-  projectName: string;
-  payoutAddress: string;
-};
+import { DistributionMatch } from "data-layer";
+import { utils } from "ethers";
+import { useContractAmountFunded } from "../FundContract";
+import { useApplicationsByRoundId } from "../../common/useApplicationsByRoundId";
+import { useAccount } from "wagmi";
 
 // CHECK: should this be in common? Josef: yes indeed
 function horizontalTabStyles(selected: boolean) {
@@ -66,172 +50,50 @@ const distributionOptions = [
   { value: "scale", label: "Scale up and distribute full pool" },
 ];
 
-function useIsRoundFullyFunded({
-  roundId,
-  matchAmount,
-  matchTokenAddress,
-}: {
-  roundId: Address;
-  matchAmount: bigint;
-  matchTokenAddress: Address;
-}) {
-  const balanceOptions =
-    matchTokenAddress == ethers.constants.AddressZero
-      ? { address: roundId }
-      : {
-          address: roundId,
-          token: matchTokenAddress,
-        };
-
-  const roundBalance = useBalance(balanceOptions);
-
-  if (roundBalance.isLoading === true || roundBalance.data === undefined) {
-    return false;
-  }
-
-  const roundBalanceValue = roundBalance.data.value.toBigInt();
-
-  return roundBalanceValue >= matchAmount;
-}
-
-type FinalizedMatches = {
-  readyForPayoutTransactionHash: string;
-  matches: RevisedMatch[];
-};
-
-async function fetchFinalizedMatches(
-  roundId: string,
-  signer: Signer
-): Promise<FinalizedMatches | undefined> {
-  const roundImplementation = new ethers.Contract(
-    roundId,
-    roundImplementationContract.abi,
-    signer
-  );
-
-  const filter =
-    roundImplementation.filters.PayFeeAndEscrowFundsToPayoutContract();
-
-  const payoutEvents = await roundImplementation.provider.getLogs({
-    ...filter,
-    fromBlock: 0,
-    toBlock: "latest",
-  });
-
-  if (payoutEvents.length > 0) {
-    const readyForPayoutTransactionHash = payoutEvents[0].transactionHash;
-
-    const payoutStrategyAddress = await roundImplementation.payoutStrategy();
-
-    const payoutStrategy = new ethers.Contract(
-      payoutStrategyAddress,
-      merklePayoutStrategyImplementationContract.abi,
-      signer
-    );
-
-    const distributionMetaPtr = await payoutStrategy.distributionMetaPtr();
-
-    const distribution = await fetchFromIPFS(distributionMetaPtr.pointer);
-
-    const distributionMatches =
-      distribution.matchingDistribution as MatchingStatsData[];
-
-    const matches: RevisedMatch[] = distributionMatches.map((m) => {
-      return {
-        applicationId: m.applicationId,
-        payoutAddress: m.projectPayoutAddress,
-        projectId: m.projectId,
-        projectName: m.projectName,
-        contributionsCount: 0,
-        revisedContributionCount: m.contributionsCount,
-        matched: BigNumber.from(m.originalMatchAmountInToken ?? 0).toBigInt(),
-        revisedMatch: BigNumber.from(m.matchAmountInToken ?? 0).toBigInt(),
-      };
-    });
-
-    return {
-      readyForPayoutTransactionHash,
-      matches,
-    };
-  }
-
-  return undefined;
-}
-
 /** Manages the state of the matching funds,
  * fetching revised matches and merging them with the original matches
  */
 function useRevisedMatchingFunds(
-  roundId: string,
-  signer: Signer | undefined,
+  round: Round,
   ignoreSaturation: boolean,
   overridesFile?: File
 ) {
+  const roundId = round.id;
   const originalMatches = useRoundMatchingFunds(roundId);
   const revisedMatches = useRoundMatchingFunds(
     roundId,
     ignoreSaturation,
     overridesFile
   );
-  const [finalizedMatchesLoading, setFinalizedMatchesLoading] =
-    useState<boolean>(false);
-  const [finalizedMatches, setFinalizedMatches] = useState<
-    FinalizedMatches | undefined
-  >(undefined);
-
-  async function reloadFinalizedMatches() {
-    if (!signer) return;
-    try {
-      setFinalizedMatchesLoading(true);
-      const res = await fetchFinalizedMatches(roundId, signer);
-      setFinalizedMatches(res);
-    } finally {
-      setFinalizedMatchesLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    let active = true;
-
-    load();
-
-    return () => {
-      active = false;
-    };
-
-    async function load() {
-      // TODO: ~signer.call is a check to avoid calling contracts on a mocked signer
-      if (!signer || !signer.call) return;
-
-      try {
-        setFinalizedMatchesLoading(true);
-        const res = await fetchFinalizedMatches(roundId, signer);
-        setFinalizedMatches(res);
-        if (!active) {
-          return;
-        }
-      } finally {
-        setFinalizedMatchesLoading(false);
-      }
-    }
-  }, [signer, roundId]);
 
   const isRevised =
     (Boolean(overridesFile) || ignoreSaturation) && !revisedMatches.isLoading;
 
   const error = revisedMatches.error || originalMatches.error;
-  const isLoading =
-    revisedMatches.isLoading ||
-    originalMatches.isLoading ||
-    finalizedMatchesLoading;
+  const isLoading = revisedMatches.isLoading || originalMatches.isLoading;
 
   const matches = useMemo(() => {
     if (!originalMatches.data || !revisedMatches.data || error) {
       return undefined;
     }
 
-    if (finalizedMatches) {
-      return finalizedMatches.matches;
+    // if the round is set to payout, return the finalized matches
+    if (
+      round.matchingDistribution !== null &&
+      round.readyForPayoutTransaction !== null
+    ) {
+      return round.matchingDistribution.matchingDistribution.map((m) => {
+        return {
+          applicationId: m.applicationId,
+          payoutAddress: m.projectPayoutAddress,
+          projectId: m.projectId,
+          projectName: m.projectName,
+          contributionsCount: m.contributionsCount,
+          revisedContributionCount: m.contributionsCount,
+          matched: BigInt(m.originalMatchAmountInToken ?? 0),
+          revisedMatch: BigInt(m.matchAmountInToken ?? 0),
+        };
+      });
     }
 
     const mergedMatchesMap: Record<string, RevisedMatch> = {};
@@ -273,17 +135,20 @@ function useRevisedMatchingFunds(
     });
 
     return mergedMatches;
-  }, [originalMatches.data, revisedMatches.data, finalizedMatches, error]);
+  }, [
+    originalMatches.data,
+    revisedMatches.data,
+    error,
+    round.matchingDistribution,
+    round.readyForPayoutTransaction,
+  ]);
 
   return {
     matches,
     isLoading,
     error,
     isRevised,
-    readyForPayoutTransactionHash:
-      finalizedMatches?.readyForPayoutTransactionHash,
     mutate() {
-      reloadFinalizedMatches();
       revisedMatches.mutate();
       originalMatches.mutate();
     },
@@ -291,48 +156,52 @@ function useRevisedMatchingFunds(
 }
 
 export default function ViewRoundResultsWrapper() {
-  const { id } = useParams();
+  const { chainId, id } = useParams() as { chainId?: string; id: string };
+  const { chain } = useAccount();
 
-  let roundId: Address | null = null;
+  const roundChainId = chainId ? Number(chainId) : chain?.id;
 
-  if (id !== undefined) {
-    try {
-      roundId = utils.getAddress(id);
-    } catch (e) {
-      // ethers failed to parse the address
-    }
+  if (!id || !roundChainId) {
+    return <div>Invalid round ID</div>;
   }
 
-  if (roundId === null) {
-    return <div>Invalid round address</div>;
-  }
-
-  return <ViewRoundResultsWithId id={roundId} />;
+  return <ViewRoundResultsWithId chainId={roundChainId} id={id} />;
 }
 
-function ViewRoundResultsWithId({ id }: { id: Address }) {
-  const round = useRound(id);
-  const roundFromGraph = useRoundById(id.toLowerCase());
+function ViewRoundResultsWithId({
+  chainId,
+  id,
+}: {
+  chainId: number;
+  id: string;
+}) {
+  const round = useRoundById(chainId, id.toLowerCase());
+  const applications = useApplicationsByRoundId(id.toLowerCase());
 
   if (
-    round.isLoading ||
-    roundFromGraph.fetchRoundStatus === ProgressStatus.IN_PROGRESS
+    round.fetchRoundStatus === ProgressStatus.IN_PROGRESS ||
+    applications.isLoading
   ) {
     return <Spinner text="We're fetching the matching data." />;
   }
 
   if (
     round.error ||
-    roundFromGraph.fetchRoundStatus === ProgressStatus.IS_ERROR ||
-    round.data === undefined ||
-    roundFromGraph.round === undefined
+    round.fetchRoundStatus === ProgressStatus.IS_ERROR ||
+    applications.error ||
+    applications.data === undefined ||
+    round.round === undefined
   ) {
     return <div>Failed to load the round</div>;
   }
 
-  const matchTokenAddress = round.data.token;
+  const matchTokenAddress = round.round.token;
 
-  const matchToken = payoutTokens.find(
+  if (round.round.chainId === undefined) {
+    return <div>Invalid chain id</div>;
+  }
+
+  const matchToken = getPayoutTokens(round.round.chainId).find(
     (t) => t.address.toLowerCase() == matchTokenAddress.toLowerCase()
   );
 
@@ -343,8 +212,8 @@ function ViewRoundResultsWithId({ id }: { id: Address }) {
   return (
     <ViewRoundResults
       roundId={id}
-      round={round.data}
-      oldRoundFromGraph={roundFromGraph.round}
+      applications={applications.data}
+      round={round.round}
       matchToken={matchToken}
     />
   );
@@ -352,65 +221,68 @@ function ViewRoundResultsWithId({ id }: { id: Address }) {
 
 function ViewRoundResults({
   roundId,
+  applications,
   round,
-  oldRoundFromGraph,
   matchToken,
 }: {
-  roundId: Address;
+  roundId: string;
+  applications: GrantApplication[];
   round: Round;
-  oldRoundFromGraph: GraphRound;
-  matchToken: PayoutToken;
+  matchToken: TToken;
 }) {
-  const { chain } = useNetwork();
-  const { data: signer } = useSigner();
+  const { chain, address } = useAccount();
   const debugModeEnabled = useDebugMode();
-  const network = useNetwork();
+  const navigate = useNavigate();
 
   const matchingTableRef = useRef<HTMLDivElement>(null);
-  const [overridesFileDraft, setOverridesFileDraft] = useState<
-    undefined | File
-  >(undefined);
   const [overridesFile, setOverridesFile] = useState<undefined | File>();
+  const [customResultsFile, setCustomResultsFile] = useState<
+    undefined | File
+  >();
+
+  const {
+    data: customMatches,
+    loading: customMatchesLoading,
+    error: customMatchesError,
+  } = useMatchCSVParser(customResultsFile ?? null);
 
   const [distributionOption, setDistributionOption] = useState<
     "keep" | "scale"
   >("keep");
 
+  const [isRecommendedDistribution, setIsRecommendedDistribution] =
+    useState<boolean>(true);
+
   const {
     matches,
     isRevised: areMatchingFundsRevised,
-    readyForPayoutTransactionHash,
     error: matchingFundsError,
     isLoading: isLoadingMatchingFunds,
     mutate: reloadMatchingFunds,
   } = useRevisedMatchingFunds(
-    roundId,
-    signer as Signer | undefined,
+    round,
     distributionOption === "scale",
     overridesFile
   );
 
+  const readyForPayoutTransactionHash = round.readyForPayoutTransaction;
+  const isReadyForPayout = readyForPayoutTransactionHash !== null;
+
   const shouldShowRevisedTable =
     areMatchingFundsRevised || Boolean(readyForPayoutTransactionHash);
 
-  const isReadyForPayout = Boolean(
-    oldRoundFromGraph?.payoutStrategy.isReadyForPayout
-  );
+  const shouldShowCustomResultsTable = Boolean(customResultsFile);
 
-  const isRoundFullyFunded = useIsRoundFullyFunded({
-    roundId,
-    matchAmount: round.matchAmount,
-    matchTokenAddress: matchToken.address,
+  const { data: amountFunded } = useContractAmountFunded({
+    round: round,
+    payoutToken: matchToken,
   });
+
+  const isRoundFullyFunded =
+    (amountFunded?.fundedAmount ?? 0) >= round.matchAmount;
 
   const [isExportingApplicationsCSV, setIsExportingApplicationsCSV] =
     useState(false);
-
-  function formatUnits(value: bigint) {
-    return `${Number(utils.formatUnits(value, matchToken?.decimal)).toFixed(
-      4
-    )} ${matchToken?.name}`;
-  }
 
   const isBeforeRoundEndDate = round && new Date() < round.roundEndTime;
 
@@ -427,45 +299,48 @@ function ViewRoundResults({
   const [progressModalOpen, setProgressModalOpen] = useState(false);
   const [errorModalOpen, setErrorModalOpen] = useState(false);
 
-  const [readyForPayoutTransaction, setReadyforPayoutTransaction] =
-    useState<TransactionResponse>();
-
   const { finalizeRound, finalizeRoundToContractStatus, IPFSCurrentStatus } =
     useFinalizeRound();
 
   const onFinalizeResults = async () => {
-    if (!matches || !signer || !oldRoundFromGraph?.payoutStrategy.id) {
+    const finalMatches = isCustomResults ? customMatches : matches;
+    if (!finalMatches || !address) {
       return;
     }
 
     setWarningModalOpen(false);
     setProgressModalOpen(true);
     try {
-      const matchingJson: MatchingStatsData[] = matches.map((match) => ({
-        contributionsCount: match.contributionsCount,
-        projectPayoutAddress: match.payoutAddress,
-        applicationId: match.applicationId,
-        projectId: match.projectId,
-        matchPoolPercentage:
-          Number((BigInt(1000000) * match.revisedMatch) / round.matchAmount) /
-          1000000,
-        projectName: match.projectName,
-        matchAmountInToken: BigNumber.from(match.revisedMatch),
-        originalMatchAmountInToken: BigNumber.from(match.matched),
-      }));
+      const matchingJson: DistributionMatch[] = finalMatches.map((match) => {
+        const app = applications.find(
+          (app) => app.applicationIndex.toString() == match.applicationId
+        );
 
-      await finalizeRound(oldRoundFromGraph.payoutStrategy.id, matchingJson);
+        /// should not happen
+        if (app === undefined) {
+          throw new Error("Application not found");
+        }
 
-      const setReadyForPayoutTx = await setReadyForPayout({
-        roundId: round.id,
-        signerOrProvider: signer,
+        return {
+          contributionsCount: match.contributionsCount,
+          projectPayoutAddress: match.payoutAddress,
+          anchorAddress: app.anchorAddress,
+          applicationId: match.applicationId,
+          matchPoolPercentage:
+            Number((BigInt(1000000) * match.revisedMatch) / round.matchAmount) /
+            1000000,
+          projectId: match.projectId,
+          projectName: match.projectName,
+          matchAmountInToken: match.revisedMatch.toString(),
+          originalMatchAmountInToken: match.matched.toString(),
+        };
       });
 
-      setReadyforPayoutTransaction(setReadyForPayoutTx);
-      reloadMatchingFunds();
+      await finalizeRound(roundId, round.payoutStrategy.id, matchingJson);
 
       setTimeout(() => {
         setProgressModalOpen(false);
+        navigate(0);
       }, errorModalDelayMs);
     } catch (error) {
       setTimeout(() => {
@@ -478,32 +353,21 @@ function ViewRoundResults({
 
   const progressSteps: ProgressStep[] = [
     {
-      name: "uploading to IPFS",
+      name: "Uploading to IPFS",
       description: "The matching distribution is being uploaded to IPFS.",
       status: IPFSCurrentStatus,
     },
     {
-      name: "saving",
+      name: "Finalizing",
       description:
-        "The matching distribution is being saved onto the contract.",
+        "The matching distribution is being uploaded to the contract.",
       status: finalizeRoundToContractStatus,
     },
     {
-      name: "Finalizing",
-      description: `The contract is being marked as eligible for payouts.`,
+      name: "Redirecting",
+      description: "Just another moment while we finish things up.",
       status:
         finalizeRoundToContractStatus === ProgressStatus.IS_SUCCESS
-          ? readyForPayoutTransaction
-            ? ProgressStatus.IS_SUCCESS
-            : ProgressStatus.IN_PROGRESS
-          : ProgressStatus.NOT_STARTED,
-    },
-    {
-      name: "finishing up",
-      description: "We’re wrapping up.",
-      status:
-        finalizeRoundToContractStatus === ProgressStatus.IS_SUCCESS &&
-        readyForPayoutTransaction !== undefined
           ? ProgressStatus.IN_PROGRESS
           : ProgressStatus.NOT_STARTED,
     },
@@ -519,6 +383,13 @@ function ViewRoundResults({
     ) / 1_000_000;
 
   const disableRoundSaturationControls = Math.round(roundSaturation) >= 100;
+
+  const sybilDefense =
+    round.roundMetadata?.quadraticFundingConfig?.sybilDefense;
+
+  const isCustomResults =
+    (sybilDefense === "passport-mbds" && isRecommendedDistribution) ||
+    (sybilDefense !== "passport-mbds" && !isRecommendedDistribution);
 
   return (
     <div className="flex flex-center flex-col mx-auto mt-3 mb-[212px]">
@@ -570,310 +441,224 @@ function ViewRoundResults({
               <div className="flex flex-col mt-4 w-min">
                 <a
                   role={"link"}
-                  href={`${process.env.REACT_APP_ALLO_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/vote_coefficients`}
+                  href={`${process.env.REACT_APP_INDEXER_V2_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/vote_coefficients`}
                   className="bg-gray-100 hover:bg-gray-200 text-black font-bold py-2 px-4 rounded flex items-center gap-2"
                 >
                   <DownloadIcon className="h-5 w-5" />
                   CSV
                 </a>
               </div>
+              {/* Matching Distribution*/}
               <div
-                className="flex mt-6 pt-6 mb-4 border-t border-gray-100"
+                className="mt-6 pt-6 mb-4 border-t border-gray-100"
                 data-testid="match-stats-title"
                 ref={matchingTableRef}
               >
-                <span className="text-sm leading-5 text-gray-500 font-semibold text-left">
-                  {areMatchingFundsRevised
-                    ? "Revised Matching Distribution"
-                    : "Matching Distribution"}
-                </span>
-                <span className="text-sm leading-5 text-gray-300 text-left ml-2">
-                  Preview
-                </span>
-                {matches && (
-                  <span className="text-sm leading-5 text-violet-400 text-left ml-auto">
-                    ({matches.length}) Projects
-                  </span>
+                <p className="text-sm leading-5 text-gray-500 font-semibold text-left">
+                  {sybilDefense === "passport-mbds"
+                    ? "Matching Distribution"
+                    : areMatchingFundsRevised
+                      ? "Revised Matching Distribution"
+                      : "Matching Distribution"}
+                </p>
+                {!readyForPayoutTransactionHash &&
+                  (sybilDefense === "passport-mbds" ? (
+                    <p className="text-sm mt-2">
+                      Frictionless auto-sybil detection
+                    </p>
+                  ) : sybilDefense === "passport" ? (
+                    <p className="text-sm mt-2">
+                      Manual verification with Passport
+                    </p>
+                  ) : (
+                    <p className="text-sm mt-2">Manual Verification</p>
+                  ))}
+                {!readyForPayoutTransactionHash && (
+                  <div>
+                    <RadioGroup
+                      value={isRecommendedDistribution}
+                      onChange={setIsRecommendedDistribution}
+                    >
+                      <RadioGroup.Option value={true}>
+                        {({ checked }) => (
+                          <div className="cursor-pointer flex flex-row my-2">
+                            <input
+                              type="radio"
+                              className="text-indigo-600 items-start mt-0.5 focus:ring-indigo-500"
+                              checked={checked}
+                              readOnly
+                            />
+                            {sybilDefense === "passport-mbds" ? (
+                              <div className="flex flex-col">
+                                <span className="text-sm ml-2 text-gray-900">
+                                  <a className="text-violet-400">Recommended</a>{" "}
+                                  - Upload your own results using the Passport
+                                  Model-Based Detection system + result
+                                  verification
+                                </span>
+                                <span className="text-sm mt-1 ml-2 text-gray-400">
+                                  Since you selected frictionless auto-sybil
+                                  detection at setup, select this option. Please
+                                  use this{" "}
+                                  <a
+                                    className="underline"
+                                    target="_blank"
+                                    href={`https://qf-calculator.fly.dev/?round_id=${round.id}&chain_id=${chain.id}`}
+                                  >
+                                    cluster matching application
+                                  </a>{" "}
+                                  to calculate your results. Click{" "}
+                                  <a
+                                    className="underline"
+                                    target="_blank"
+                                    href="https://roundoperations.gitcoin.co/round-operations/post-round/cluster-matching-and-csv-upload"
+                                  >
+                                    here
+                                  </a>{" "}
+                                  to learn more.
+                                </span>
+                              </div>
+                            ) : sybilDefense === "passport" ? (
+                              <div className="flex flex-col">
+                                <span className="text-sm ml-2 text-gray-900">
+                                  <a className="text-violet-400">Recommended</a>{" "}
+                                  - System default quadratic funding calculation
+                                </span>
+                                <span className="text-sm mt-1 ml-2 text-gray-400">
+                                  Since you selected manual verification with
+                                  Passport at setup, select this option to
+                                  calculate your round’s final results.
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col">
+                                <span className="text-sm ml-2 text-gray-900">
+                                  <a className="text-violet-400">Recommended</a>{" "}
+                                  - System default quadratic funding calculation
+                                </span>
+                                <span className="text-sm mt-1 ml-2 text-gray-400">
+                                  Since you default quadratic funding calculation
+                                  at setup, select this option. Please
+                                  use this{" "}
+                                  <a
+                                    className="underline"
+                                    target="_blank"
+                                    href={`https://qf-calculator.fly.dev/?round_id=${round.id}&chain_id=${chain.id}`}
+                                  >
+                                    cluster matching application
+                                  </a>{" "}
+                                  to calculate your results. Click{" "}
+                                  <a
+                                    className="underline"
+                                    target="_blank"
+                                    href="https://roundoperations.gitcoin.co/round-operations/post-round/cluster-matching-and-csv-upload"
+                                  >
+                                    here
+                                  </a>{" "}
+                                  to learn more.
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </RadioGroup.Option>
+                      <RadioGroup.Option value={false}>
+                        {({ checked }) => (
+                          <div className="cursor-pointer flex my-2">
+                            <input
+                              type="radio"
+                              className="text-indigo-600 items-start mt-0.5 focus:ring-indigo-500"
+                              checked={checked}
+                              readOnly
+                            />
+                            {sybilDefense === "passport-mbds" ? (
+                              <span className="text-sm ml-2 text-gray-900">
+                                System default quadratic funding calculation
+                              </span>
+                            ) : sybilDefense === "passport" ? (
+                              <span className="text-sm ml-2 text-gray-900">
+                                Upload your own results
+                              </span>
+                            ) : (
+                              <span className="text-sm ml-2 text-gray-900">
+                                Upload your own results
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </RadioGroup.Option>
+                    </RadioGroup>
+                  </div>
                 )}
               </div>
-              {isLoadingMatchingFunds ? (
-                <Spinner text="We're fetching the matching data." />
-              ) : (
-                <div>
-                  {matchingFundsError && (
-                    <div className="p-4 bg-red-50 text-red-400 my-4">
-                      <div className="font-bold text-red-500 text-sm">
-                        Something went wrong while loading the matching
-                        distribution:
-                      </div>
-                      {matchingFundsError?.message}
-                    </div>
-                  )}
-                  {matches && (
-                    <>
-                      <div className="col-span-3 border border-gray-100 rounded p-4 row-span-2 overflow-y-auto max-h-80">
-                        <table
-                          className="table-fixed border-separate h-full w-full"
-                          data-testid="match-stats-table"
-                        >
-                          <thead className="font-normal">
-                            <tr>
-                              <th className="text-sm leading-5 pr-2 text-gray-500 text-left">
-                                Project Name
-                              </th>
-                              <th className="text-sm leading-5 px-2 text-gray-500 text-left w-40">
-                                Project ID
-                              </th>
-                              <th className="text-sm leading-5 px-2 text-gray-500 text-left w-40">
-                                No. of Contributions
-                              </th>
-                              <th className="text-sm leading-5 px-2 text-gray-500 text-left">
-                                {shouldShowRevisedTable
-                                  ? "Original Matching Amount"
-                                  : "Matching Amount"}
-                              </th>
-                              {shouldShowRevisedTable && (
-                                <th className="text-sm leading-5 px-2 text-gray-500 text-left">
-                                  New Matching Amount
-                                </th>
-                              )}
-                              <th className="text-sm leading-5 px-2 text-gray-500 text-left w-32">
-                                Matching %
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {matches &&
-                              matches.map((match) => {
-                                const percentage =
-                                  Number(
-                                    (BigInt(1000000) * match.revisedMatch) /
-                                      round.matchAmount
-                                  ) / 10000;
-
-                                return (
-                                  <tr key={match.applicationId}>
-                                    <td className="text-sm leading-5 py-2 pr-2 text-gray-400 text-left text-ellipsis overflow-hidden whitespace-nowrap">
-                                      {match.projectName}
-                                    </td>
-                                    <td className="text-sm leading-5 px-2 text-gray-400 text-left text-ellipsis overflow-hidden">
-                                      {match.projectId}
-                                    </td>
-                                    <td className="text-sm leading-5 px-2 text-gray-400 text-left">
-                                      {match.contributionsCount}
-                                    </td>
-                                    <td className="text-sm leading-5 px-2 text-gray-400 text-left">
-                                      {Number(
-                                        utils.formatUnits(
-                                          match.matched,
-                                          matchToken?.decimal
-                                        )
-                                      ).toFixed(4)}{" "}
-                                      {matchToken?.name}
-                                    </td>
-                                    {shouldShowRevisedTable && (
-                                      <td className="text-sm leading-5 px-2 text-gray-400 text-left">
-                                        {Number(
-                                          utils.formatUnits(
-                                            match.revisedMatch,
-                                            matchToken?.decimal
-                                          )
-                                        ).toFixed(4)}{" "}
-                                        {matchToken?.name}
-                                      </td>
-                                    )}
-                                    <td className="text-sm leading-5 px-2 text-gray-400 text-left">
-                                      {percentage.toString()}%
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                          </tbody>
-                        </table>
-                      </div>
-                      <div className="flex flex-col mt-4 w-min">
-                        <button
-                          onClick={() => {
-                            /* Download matching distribution data as csv */
-                            if (!matches) {
-                              return;
-                            }
-
-                            downloadArrayAsCsv(matches, "matches.csv");
-                          }}
-                          className="bg-gray-100 hover:bg-gray-200 text-black font-bold py-2 px-4 rounded flex items-center gap-2"
-                        >
-                          <DownloadIcon className="h-5 w-5" /> CSV
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
+              {isCustomResults && !readyForPayoutTransactionHash && (
+                <>
+                  <UploadCustomResults
+                    customResultsFile={customResultsFile}
+                    setCustomResultsFile={setCustomResultsFile}
+                    reloadMatchingFunds={reloadMatchingFunds}
+                    shouldShowCustomResultsTable={shouldShowCustomResultsTable}
+                  />
+                  <MatchingDistributionPreview
+                    matches={customMatches}
+                    isLoadingMatchingFunds={customMatchesLoading}
+                    matchingFundsError={customMatchesError}
+                    shouldShowRevisedTable={false}
+                    round={round}
+                    matchToken={matchToken}
+                  />
+                </>
               )}
-              <div className="flex flex-col mt-4 gap-1 mb-3">
-                <span className="text-sm leading-5 text-gray-500 font-semibold text-left mb-1">
-                  Round Saturation
-                </span>
-                <span className="text-sm leading-5 font-normal text-left">
-                  {`Current round saturation: ${roundSaturation.toFixed(2)}%`}
-                </span>
-                <span className="text-sm leading-5 font-normal text-left">
-                  {`${formatUnits(sumOfMatches)} out of the ${formatUnits(
-                    round.matchAmount
-                  )} matching fund will be distributed to grantees.`}
-                </span>
-              </div>
+              {(!isCustomResults || readyForPayoutTransactionHash) && (
+                <>
+                  <MatchingDistributionPreview
+                    matches={matches}
+                    isLoadingMatchingFunds={isLoadingMatchingFunds}
+                    matchingFundsError={matchingFundsError}
+                    shouldShowRevisedTable={shouldShowRevisedTable}
+                    round={round}
+                    matchToken={matchToken}
+                  />
+                  <DownloadMatchesAsCSV matches={matches} />
+                  <RoundSaturationView
+                    roundSaturation={roundSaturation}
+                    sumOfMatches={sumOfMatches}
+                    round={round}
+                    matchToken={matchToken}
+                  />
+                </>
+              )}
+              {!isCustomResults && !readyForPayoutTransactionHash && (
+                <>
+                  <RoundSaturationOptions
+                    distributionOption={distributionOption}
+                    setDistributionOption={setDistributionOption}
+                    disableRoundSaturationControls={
+                      disableRoundSaturationControls
+                    }
+                  />
+                  <ReviseVotingCoefficients
+                    overridesFile={overridesFile}
+                    setOverridesFile={setOverridesFile}
+                    reloadMatchingFunds={reloadMatchingFunds}
+                    matchingTableRef={matchingTableRef}
+                    shouldShowRevisedTable={shouldShowRevisedTable}
+                  />
+                </>
+              )}
               {!readyForPayoutTransactionHash && (
                 <>
-                  <RadioGroup
-                    value={distributionOption}
-                    onChange={setDistributionOption}
-                    disabled={disableRoundSaturationControls}
-                  >
-                    <RadioGroup.Label className="sr-only">
-                      Distribution options
-                    </RadioGroup.Label>
-                    <div className="space-y-2">
-                      {distributionOptions.map((option) => (
-                        <RadioGroup.Option
-                          key={option.value}
-                          value={option.value}
-                          className={() =>
-                            classNames(
-                              "cursor-pointer flex items-center",
-                              disableRoundSaturationControls &&
-                                "opacity-50 cursor-not-allowed"
-                            )
-                          }
-                        >
-                          {({ checked }) => (
-                            <>
-                              <input
-                                type="radio"
-                                className="text-indigo-600 focus:ring-indigo-500"
-                                checked={checked}
-                                readOnly
-                              />
-                              <span
-                                className={classNames(
-                                  "ml-2 font-medium text-gray-900",
-                                  checked && "text-indigo-900"
-                                )}
-                              >
-                                {option.label}
-                              </span>
-                            </>
-                          )}
-                        </RadioGroup.Option>
-                      ))}
-                    </div>
-                  </RadioGroup>
-                  <div className="flex flex-col mt-4">
-                    <span className="text-sm leading-5 text-gray-500 font-semibold text-left mb-1 mt-2">
-                      Revise Results
-                    </span>
-                    <div className="text-sm leading-5 text-left mb-1">
-                      Upload a CSV with the finalized Vote Coefficient overrides{" "}
-                      <b>only</b>. For instructions, click{" "}
-                      <a
-                        className="underline"
-                        href={
-                          "https://support.gitcoin.co/gitcoin-knowledge-base/gitcoin-grants-program/program-managers/how-to-view-your-round-results"
-                        }
-                      >
-                        here
-                      </a>
-                      .
-                    </div>
-                    <div className="text-sm pt-2 leading-5 text-left flex items-start justify-start">
-                      <ExclamationCircleIcon
-                        className={"w-6 h-6 text-gray-500 mr-2.5"}
-                      />
-                      If you navigate away from this page, your data will be
-                      lost. You will be able to re-upload data as much as you’d
-                      like, but it will not be saved to the contract until you
-                      finalize results.
-                    </div>
-                    <FileUploader
-                      file={overridesFileDraft}
-                      onSelectFile={(file: File) => {
-                        setOverridesFileDraft(file);
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      className="mt-4 mr-auto"
-                      $variant="secondary"
-                      onClick={() => {
-                        setOverridesFile(overridesFileDraft);
-                        // force a refresh each time fot better ux
-                        reloadMatchingFunds();
-
-                        // make sure table is in view
-                        if (matchingTableRef.current) {
-                          window.scrollTo({
-                            top: matchingTableRef.current.offsetTop,
-                            behavior: "smooth",
-                          });
-                        }
-                      }}
-                      disabled={overridesFileDraft === undefined}
-                    >
-                      <UploadIcon className="h-5 w-5 inline mr-2" />
-                      <span>Upload and revise</span>
-                    </Button>
-                    <hr className="my-4" />
-                    {!isReadyForPayout && (
-                      <>
-                        <div className="ml-auto">
-                          {shouldShowRevisedTable && (
-                            <button
-                              onClick={() => {
-                                setOverridesFile(undefined);
-                                reloadMatchingFunds();
-                              }}
-                              className="w-fit bg-white border border-gray-100 text-black py-2 mt-2 px-3 rounded gap-2 mr-2"
-                            >
-                              Cancel
-                            </button>
-                          )}
-                          <button
-                            data-testid="finalize-results-button"
-                            onClick={() => {
-                              setWarningModalOpen(true);
-                            }}
-                            disabled={!isRoundFullyFunded}
-                            className={`self-end w-fit ${
-                              isRoundFullyFunded
-                                ? "bg-violet-400"
-                                : "bg-violet-200"
-                            } text-white py-2 mt-2 px-3 rounded`}
-                          >
-                            Finalize Results
-                          </button>
-                        </div>
-                        <span className="text-sm leading-5 text-gray-400 mt-5 text-right">
-                          The contract will be locked once results are
-                          finalized. You will not be able to change the results
-                          after you finalize.
-                        </span>
-                      </>
-                    )}
-                  </div>
+                  <FinalizeResultsButton
+                    isReadyForPayout={isReadyForPayout}
+                    isRoundFullyFunded={isRoundFullyFunded}
+                    setWarningModalOpen={setWarningModalOpen}
+                  />
                 </>
               )}
               {readyForPayoutTransactionHash && (
-                <>
-                  <hr className="my-4 mt-8" />
-                  <a
-                    href={`${network.chain?.blockExplorers?.default.url}/tx/${readyForPayoutTransactionHash}`}
-                    target="_blank"
-                    className="self-end w-fit bg-white hover:bg-gray-50 border border-gray-100 text-gray-500 py-2
-                   mt-2 px-3 rounded flex items-center gap-2 ml-auto"
-                  >
-                    View on Etherscan
-                  </a>
-                </>
+                <ViewTransactionButton
+                  readyForPayoutTransactionHash={readyForPayoutTransactionHash}
+                />
               )}
             </div>
           </Tab.Panel>
@@ -892,7 +677,7 @@ function ViewRoundResults({
             <div className="pt-6">
               <a
                 className="flex items-center mb-4"
-                href={`${process.env.REACT_APP_ALLO_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/votes`}
+                href={`${process.env.REACT_APP_INDEXER_V2_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/votes`}
               >
                 <span className="w-40">Raw Votes</span>
                 <DownloadIcon className="h-5 w-5" />
@@ -907,7 +692,10 @@ function ViewRoundResults({
                     round &&
                       (await exportAndDownloadApplicationsCSV(
                         round.id,
-                        chain.id
+                        chain.id,
+                        round.id.startsWith("0x")
+                          ? round.id
+                          : round.payoutStrategy.id
                       ));
                   } finally {
                     setIsExportingApplicationsCSV(false);
@@ -923,14 +711,14 @@ function ViewRoundResults({
               </button>
               <a
                 className="flex items-center mb-4"
-                href={`${process.env.REACT_APP_ALLO_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/round`}
+                href={`${process.env.REACT_APP_INDEXER_V2_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/round`}
               >
                 <span className="w-40">Round</span>
                 <DownloadIcon className="h-5 w-5" />
               </a>
               <a
                 className="flex items-center mb-4"
-                href={`${process.env.REACT_APP_ALLO_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/prices`}
+                href={`${process.env.REACT_APP_INDEXER_V2_API_URL}/api/v1/chains/${chain?.id}/rounds/${roundId}/exports/prices`}
               >
                 <span className="w-40">Prices</span>
                 <DownloadIcon className="h-5 w-5" />
@@ -1041,9 +829,15 @@ function NoInformationContent() {
 
 async function exportAndDownloadApplicationsCSV(
   roundId: string,
-  chainId: number
+  chainId: number,
+  litContractAddress: string
 ) {
-  const csv = await roundApplicationsToCSV(roundId, chainId, true);
+  const csv = await roundApplicationsToCSV(
+    roundId,
+    chainId,
+    litContractAddress,
+    true
+  );
   // create a download link and click it
   const blob = new Blob([csv], {
     type: "text/csv;charset=utf-8;",
@@ -1097,4 +891,441 @@ export function downloadFile(data: BlobPart, filename: string): void {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+}
+
+function MatchingDistributionPreview(props: {
+  matches: RevisedMatch[] | undefined;
+  isLoadingMatchingFunds: boolean;
+  matchingFundsError: Error | undefined;
+  shouldShowRevisedTable: boolean;
+  round: Round;
+  matchToken: TToken | undefined;
+}) {
+  return (
+    <>
+      <div className="flex mt-4 pt-6 mb-4">
+        <p className="text-sm leading-5 text-gray-500 font-semibold text-left">
+          Preview
+        </p>
+        {props.matches && (
+          <span className="text-sm leading-5 text-violet-400 text-left ml-auto">
+            ({props.matches.length}) Projects
+          </span>
+        )}
+      </div>
+      {props.isLoadingMatchingFunds ? (
+        <Spinner text="We're fetching the matching data." />
+      ) : (
+        <div>
+          {props.matchingFundsError && (
+            <div className="p-4 bg-red-50 text-red-400 my-4">
+              <div className="font-bold text-red-500 text-sm">
+                Something went wrong while loading the matching distribution:
+              </div>
+              {props.matchingFundsError?.message}
+            </div>
+          )}
+          {props.matches !== undefined ? (
+            <>
+              <div className="col-span-3 border border-gray-100 rounded p-4 row-span-2 overflow-y-auto max-h-80">
+                <table
+                  className="table-fixed border-separate h-full w-full"
+                  data-testid="match-stats-table"
+                >
+                  <thead className="font-normal">
+                    <tr>
+                      <th className="text-sm leading-5 pr-2 text-gray-500 text-left">
+                        Project Name
+                      </th>
+                      <th className="text-sm leading-5 px-2 text-gray-500 text-left w-40">
+                        Project ID
+                      </th>
+                      <th className="text-sm leading-5 px-2 text-gray-500 text-left w-40">
+                        No. of Contributions
+                      </th>
+                      <th className="text-sm leading-5 px-2 text-gray-500 text-left">
+                        {props.shouldShowRevisedTable
+                          ? "Original Matching Amount"
+                          : "Matching Amount"}
+                      </th>
+                      {props.shouldShowRevisedTable && (
+                        <th className="text-sm leading-5 px-2 text-gray-500 text-left">
+                          New Matching Amount
+                        </th>
+                      )}
+                      <th className="text-sm leading-5 px-2 text-gray-500 text-left w-32">
+                        Matching %
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {props.matches &&
+                      props.matches.map((match) => {
+                        const percentage =
+                          Number(
+                            (BigInt(1000000) * match.revisedMatch) /
+                              props.round.matchAmount
+                          ) / 10000;
+
+                        return (
+                          <tr key={match.applicationId}>
+                            <td className="text-sm leading-5 py-2 pr-2 text-gray-400 text-left text-ellipsis overflow-hidden whitespace-nowrap">
+                              {match.projectName}
+                            </td>
+                            <td className="text-sm leading-5 px-2 text-gray-400 text-left text-ellipsis overflow-hidden">
+                              {match.projectId}
+                            </td>
+                            <td className="text-sm leading-5 px-2 text-gray-400 text-left">
+                              {match.contributionsCount}
+                            </td>
+                            <td className="text-sm leading-5 px-2 text-gray-400 text-left">
+                              {Number(
+                                utils.formatUnits(
+                                  match.matched,
+                                  props.matchToken?.decimals
+                                )
+                              ).toFixed(4)}{" "}
+                              {props.matchToken?.code}
+                            </td>
+                            {props.shouldShowRevisedTable && (
+                              <td className="text-sm leading-5 px-2 text-gray-400 text-left">
+                                {Number(
+                                  utils.formatUnits(
+                                    match.revisedMatch,
+                                    props.matchToken?.decimals
+                                  )
+                                ).toFixed(4)}{" "}
+                                {props.matchToken?.code}
+                              </td>
+                            )}
+                            <td className="text-sm leading-5 px-2 text-gray-400 text-left">
+                              {percentage.toString()}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center p-4 py-16 border border-gray-100 rounded overflow-y-auto max-h-80">
+              <NoInformationIcon className="w-6 h-6" />
+              <p className="mt-2">
+                Your results will appear here when uploaded
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function DownloadMatchesAsCSV(props: { matches: RevisedMatch[] | undefined }) {
+  return (
+    <div className="flex flex-col mt-4 w-min">
+      <button
+        onClick={() => {
+          /* Download matching distribution data as csv */
+          if (!props.matches) {
+            return;
+          }
+
+          downloadArrayAsCsv(props.matches, "matches.csv");
+        }}
+        className="bg-gray-100 hover:bg-gray-200 text-black font-bold py-2 px-4 rounded flex items-center gap-2"
+      >
+        <DownloadIcon className="h-5 w-5" /> CSV
+      </button>
+    </div>
+  );
+}
+
+function RoundSaturationView(props: {
+  roundSaturation: number;
+  sumOfMatches: bigint;
+  round: Round;
+  matchToken: TToken;
+}) {
+  return (
+    <div className="flex flex-col mt-4 gap-1 mb-3">
+      <span className="text-sm leading-5 text-gray-500 font-semibold text-left mb-1">
+        Round Saturation
+      </span>
+      <span className="text-sm leading-5 font-normal text-left">
+        {`Current round saturation: ${props.roundSaturation.toFixed(2)}%`}
+      </span>
+      <span className="text-sm leading-5 font-normal text-left">
+        {`${formatUnits(
+          props.sumOfMatches,
+          props.matchToken
+        )} out of the ${formatUnits(
+          props.round.matchAmount,
+          props.matchToken
+        )} matching fund will be distributed to grantees.`}
+      </span>
+    </div>
+  );
+}
+
+function RoundSaturationOptions(props: {
+  distributionOption: "keep" | "scale";
+  setDistributionOption: (option: "keep" | "scale") => void;
+  disableRoundSaturationControls: boolean;
+}) {
+  return (
+    <>
+      <RadioGroup
+        value={props.distributionOption}
+        onChange={props.setDistributionOption}
+        disabled={props.disableRoundSaturationControls}
+      >
+        <RadioGroup.Label className="sr-only">
+          Distribution options
+        </RadioGroup.Label>
+        <div className="space-y-2">
+          {distributionOptions.map((option) => (
+            <RadioGroup.Option
+              key={option.value}
+              value={option.value}
+              className={() =>
+                classNames(
+                  "cursor-pointer flex items-center",
+                  props.disableRoundSaturationControls &&
+                    "opacity-50 cursor-not-allowed"
+                )
+              }
+            >
+              {({ checked }) => (
+                <>
+                  <input
+                    type="radio"
+                    className="text-indigo-600 focus:ring-indigo-500"
+                    checked={checked}
+                    readOnly
+                  />
+                  <span
+                    className={classNames(
+                      "ml-2 font-medium text-gray-900",
+                      checked && "text-indigo-900"
+                    )}
+                  >
+                    {option.label}
+                  </span>
+                </>
+              )}
+            </RadioGroup.Option>
+          ))}
+        </div>
+      </RadioGroup>
+    </>
+  );
+}
+
+function ReviseVotingCoefficients(props: {
+  overridesFile: File | undefined;
+  setOverridesFile: (file: File | undefined) => void;
+  reloadMatchingFunds: () => void;
+  matchingTableRef: React.RefObject<HTMLDivElement>;
+  shouldShowRevisedTable: boolean;
+}) {
+  const [overridesFileDraft, setOverridesFileDraft] = useState<
+    undefined | File
+  >(undefined);
+  return (
+    <div className="flex flex-col mt-4">
+      <span className="text-sm leading-5 text-gray-500 font-semibold text-left mb-1 mt-2">
+        Revise Voting Coefficients
+      </span>
+      <div className="text-sm leading-5 text-left mb-1">
+        Upload a CSV with the finalized Vote Coefficient overrides <b>only</b>.
+        For instructions, click{" "}
+        <a
+          className="underline"
+          target="_blank"
+          href={
+            "https://roundoperations.gitcoin.co/round-operations/post-round/sybil-analysis"
+          }
+        >
+          here
+        </a>
+        .
+      </div>
+      <div className="text-sm pt-2 leading-5 text-left flex items-start justify-start">
+        <ExclamationCircleIcon className={"w-6 h-6 text-gray-500 mr-2.5"} />
+        If you navigate away from this page, your data will be lost. You will be
+        able to re-upload data as much as you’d like, but it will not be saved
+        to the contract until you finalize results.
+      </div>
+      <FileUploader
+        file={overridesFileDraft}
+        onSelectFile={(file: File) => {
+          setOverridesFileDraft(file);
+        }}
+      />
+      <div className="flex flex-row justify-items-start gap-2 items-center">
+        <div>
+          <Button
+            type="button"
+            className="mt-4 mr-auto"
+            $variant="secondary"
+            onClick={() => {
+              props.setOverridesFile(overridesFileDraft);
+              // force a refresh each time fot better ux
+              props.reloadMatchingFunds();
+
+              // make sure table is in view
+              if (props.matchingTableRef.current) {
+                window.scrollTo({
+                  top: props.matchingTableRef.current.offsetTop,
+                  behavior: "smooth",
+                });
+              }
+            }}
+            disabled={overridesFileDraft === undefined}
+          >
+            <UploadIcon className="h-5 w-5 inline mr-2" />
+            <span>Upload and revise</span>
+          </Button>
+        </div>
+        <div>
+          {props.shouldShowRevisedTable && (
+            <button
+              onClick={() => {
+                props.setOverridesFile(undefined);
+                props.reloadMatchingFunds();
+              }}
+              className="w-fit bg-white border border-gray-100 text-black py-1 mt-3 px-3 rounded gap-2 ml-2"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UploadCustomResults(props: {
+  customResultsFile: File | undefined;
+  setCustomResultsFile: (file: File | undefined) => void;
+  reloadMatchingFunds: () => void;
+  shouldShowCustomResultsTable: boolean;
+}) {
+  const [customResultsDraft, setCustomResultsDraft] = useState<
+    undefined | File
+  >(undefined);
+  return (
+    <div className="flex flex-col mt-4">
+      <span className="text-sm leading-5 text-gray-500 font-semibold text-left mb-1 mt-2">
+        Upload Results
+      </span>
+      <div className="text-sm leading-5 text-left mb-1">
+        Upload a CSV file with your round results. For instructions, click{" "}
+        <a
+          className="underline"
+          target="_blank"
+          href={
+            "https://roundoperations.gitcoin.co/round-operations/post-round/cluster-matching-and-csv-upload"
+          }
+        >
+          here
+        </a>
+        .
+      </div>
+      <div className="text-sm pt-2 leading-5 text-left flex items-start justify-start">
+        <ExclamationCircleIcon className={"w-6 h-6 text-gray-500 mr-2.5"} />
+        If you navigate away from this page, your data will be lost. You will be
+        able to re-upload data as much as you’d like, but it will not be saved
+        to the contract until you finalize results.
+      </div>
+      <FileUploader
+        file={customResultsDraft}
+        onSelectFile={(file: File) => {
+          setCustomResultsDraft(file);
+        }}
+      />
+      <div className="flex flex-row justify-items-start gap-2 items-center">
+        <div>
+          <Button
+            type="button"
+            className="mt-4 mr-auto"
+            $variant="secondary"
+            onClick={() => {
+              props.setCustomResultsFile(customResultsDraft);
+              // force a refresh each time fot better ux
+              props.reloadMatchingFunds();
+            }}
+          >
+            <UploadIcon className="h-5 w-5 inline mr-2" />
+            <span>Upload</span>
+          </Button>
+        </div>
+        <div>
+          {props.shouldShowCustomResultsTable && (
+            <button
+              onClick={() => {
+                props.setCustomResultsFile(undefined);
+                props.reloadMatchingFunds();
+              }}
+              className="w-fit bg-white border border-gray-100 text-black py-1 mt-3 px-3 rounded gap-2 ml-2"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FinalizeResultsButton(props: {
+  isReadyForPayout: boolean;
+  isRoundFullyFunded: boolean;
+  setWarningModalOpen: (open: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-col justify-items-end">
+      <hr className="my-4" />
+      <button
+        data-testid="finalize-results-button"
+        onClick={() => {
+          props.setWarningModalOpen(true);
+        }}
+        className={`self-end w-fit ${"bg-violet-400"} text-white py-2 mt-2 px-3 rounded`}
+      >
+        Finalize Results
+      </button>
+      <span className="text-sm leading-5 text-gray-400 mt-5 text-right">
+        The contract will be locked once results are finalized. You will not be
+        able to change the results after you finalize.
+      </span>
+    </div>
+  );
+}
+
+function ViewTransactionButton(props: {
+  readyForPayoutTransactionHash: string | null;
+}) {
+  const { chain } = useAccount();
+  return (
+    <>
+      <hr className="my-4 mt-8" />
+      <a
+        href={`${chain?.blockExplorers?.default.url}/tx/${props.readyForPayoutTransactionHash}`}
+        target="_blank"
+        className="self-end w-fit bg-white hover:bg-gray-50 border border-gray-100 text-gray-500 py-2
+                   mt-2 px-3 rounded flex items-center gap-2 ml-auto"
+      >
+        View on Etherscan
+      </a>
+    </>
+  );
+}
+
+function formatUnits(value: bigint, matchToken?: TToken) {
+  return `${Number(utils.formatUnits(value, matchToken?.decimals)).toFixed(
+    4
+  )} ${matchToken?.code}`;
 }

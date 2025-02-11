@@ -1,28 +1,37 @@
-import { Outlet, useOutletContext } from "react-router-dom";
+import { Outlet } from "react-router-dom";
 import {
   useAccount,
-  useNetwork,
   usePublicClient,
-  useWalletClient,
 } from "wagmi";
 
-import { Web3Instance } from "../api/types";
 import { Spinner } from "./Spinner";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { getEthersSigner } from "../../app/wagmi";
+import { JsonRpcSigner } from "@ethersproject/providers";
+import { useState, useEffect } from "react";
 
 /**
  * Component for protecting child routes that require web3 wallet instance.
  * It prompts a user to connect wallet if no web3 instance is found.
  */
 export default function Auth() {
-  const { address, isConnected, isConnecting } = useAccount();
-  const { chain } = useNetwork();
-  const { data: signer } = useWalletClient();
+  const [signer, setSigner] = useState<JsonRpcSigner>();
+
+  const { address, chain, isConnected, isConnecting, connector } = useAccount();
+
+  useEffect(() => {
+    const init = async () => {
+      const s = await getEthersSigner(connector!, chain!.id);
+      setSigner(s);
+    };
+    if (isConnected && chain && connector?.getAccounts) init();
+  }, [chain, isConnected, connector]);
+
   const provider = usePublicClient();
 
   const data = {
     address,
-    chain: { id: chain?.id, name: chain?.name, network: chain?.network },
+    chain: { id: chain?.id, name: chain?.name, network: chain },
     provider,
     signer,
   };
@@ -45,11 +54,4 @@ export default function Auth() {
   ) : (
     <Outlet context={data} />
   );
-}
-
-/**
- * Wrapper hook to expose wallet auth information to other components
- */
-export function useWallet() {
-  return useOutletContext<Web3Instance>();
 }

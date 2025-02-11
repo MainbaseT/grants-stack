@@ -1,12 +1,16 @@
 import { datadogLogs } from "@datadog/browser-logs";
 import {
-  PROVIDER_ID,
-  VerifiableCredential,
-} from "@gitcoinco/passport-sdk-types";
-import { ShieldCheckIcon } from "@heroicons/react/24/solid";
-import { formatDateWithOrdinal, renderToHTML, useParams } from "common";
-import { getConfig } from "common/src/config";
-
+  ArrowTrendingUpIcon,
+  LinkIcon,
+  ShieldCheckIcon,
+} from "@heroicons/react/24/solid";
+import {
+  formatDateWithOrdinal,
+  renderToHTML,
+  useParams,
+  useValidateCredential,
+} from "common";
+import { getAlloVersion } from "common/src/config";
 import { formatDistanceToNowStrict } from "date-fns";
 import React, {
   ComponentProps,
@@ -14,11 +18,11 @@ import React, {
   createElement,
   FunctionComponent,
   PropsWithChildren,
+  useEffect,
   useMemo,
   useState,
 } from "react";
-import useSWR from "swr";
-import { useEnsName } from "wagmi";
+import { useAccount, useEnsName } from "wagmi";
 import DefaultLogoImage from "../../assets/default_logo.png";
 import { ReactComponent as GithubIcon } from "../../assets/github-logo.svg";
 import { ReactComponent as TwitterIcon } from "../../assets/twitter-logo.svg";
@@ -33,17 +37,26 @@ import { isDirectRound, isInfiniteDate } from "../api/utils";
 import { useCartStorage } from "../../store";
 import { Box, Skeleton, SkeletonText, Tab, Tabs } from "@chakra-ui/react";
 import { GrantList } from "./KarmaGrant/GrantList";
+import { ImpactList } from "./KarmaGrant/ImpactList";
 import { useGap } from "../api/gap";
-import { ShoppingCartIcon } from "@heroicons/react/24/outline";
-import { DataLayer, useDataLayer } from "data-layer";
+import { StatList } from "./OSO/ImpactStats";
+import { useOSO } from "../api/oso";
+import { CheckIcon, ShoppingCartIcon } from "@heroicons/react/24/outline";
+import {
+  Application,
+  BaseQuestion,
+  Round,
+  RoundApplicationQuestion,
+  useDataLayer,
+} from "data-layer";
 import { DefaultLayout } from "../common/DefaultLayout";
-import { truncate } from "../common/utils/truncate";
-import tw from "tailwind-styled-components";
 import {
   mapApplicationToProject,
   mapApplicationToRound,
   useApplication,
 } from "../projects/hooks/useApplication";
+import { PassportWidget } from "../common/PassportWidget";
+import CopyToClipboard from "./CopyToClipboard";
 
 const CalendarIcon = (props: React.SVGProps<SVGSVGElement>) => {
   return (
@@ -65,19 +78,6 @@ const CalendarIcon = (props: React.SVGProps<SVGSVGElement>) => {
   );
 };
 
-enum VerifiedCredentialState {
-  VALID,
-  INVALID,
-  PENDING,
-}
-
-export const IAM_SERVER =
-  "did:key:z6MkghvGHLobLEdj1bgRLhS4LPGJAvbMA1tn2zcRyqmYU5LC";
-
-const {
-  allo: { version },
-} = getConfig();
-
 const useProjectDetailsParams = useParams<{
   chainId: string;
   roundId: string;
@@ -91,22 +91,51 @@ export default function ViewProjectDetails() {
     "====> Route: /round/:chainId/:roundId/:applicationId"
   );
   datadogLogs.logger.info(`====> URL: ${window.location.href}`);
-  const { chainId, roundId, applicationId } = useProjectDetailsParams();
+  const {
+    chainId,
+    roundId,
+    applicationId: paramApplicationId,
+  } = useProjectDetailsParams();
   const dataLayer = useDataLayer();
+  const { address: walletAddress } = useAccount();
 
-  const { data: application, error } = useApplication(
+  let applicationId: string;
+
+  /// handle URLs where the application ID is ${roundId}-${applicationId}
+  if (paramApplicationId.includes("-")) {
+    applicationId = paramApplicationId.split("-")[1];
+  } else {
+    applicationId = paramApplicationId;
+  }
+
+  const {
+    data: application,
+    error,
+    isLoading,
+  } = useApplication(
     {
       chainId: Number(chainId as string),
       roundId,
-      applicationId: applicationId?.split("-")[1],
+      applicationId: applicationId,
     },
     dataLayer
   );
+  const { round: roundDetails } = useRoundById(Number(chainId), roundId);
 
-  const projectToRender = mapApplicationToProject(application);
-  const round = mapApplicationToRound(application);
+  const projectToRender = application && mapApplicationToProject(application);
+  const round = application && mapApplicationToRound(application);
 
-  const { grants } = useGap(projectToRender?.projectRegistryId as string);
+  round && (round.chainId = Number(chainId));
+  const isSybilDefenseEnabled =
+    round?.roundMetadata?.quadraticFundingConfig?.sybilDefense === true ||
+    round?.roundMetadata?.quadraticFundingConfig?.sybilDefense !== "none";
+
+  const { grants, impacts } = useGap(
+    projectToRender?.projectRegistryId as string
+  );
+  const { stats } = useOSO(
+    projectToRender?.projectMetadata.projectGithub as string
+  );
 
   const currentTime = new Date();
   const isAfterRoundEndDate =
@@ -115,14 +144,37 @@ export default function ViewProjectDetails() {
       ? false
       : round && round.roundEndTime <= currentTime);
 
-  const disableAddToCartButton = version === "allo-v2" || isAfterRoundEndDate;
+  const isBeforeRoundStartDate =
+    round &&
+    (isInfiniteDate(round.roundStartTime)
+      ? false
+      : round && currentTime < round.roundStartTime);
+
+  const alloVersion = getAlloVersion();
+
+  useEffect(() => {
+    if (
+      isAfterRoundEndDate !== undefined &&
+      roundId?.startsWith("0x") &&
+      alloVersion === "allo-v2" &&
+      !isAfterRoundEndDate
+    ) {
+      window.location.href = `https://explorer-v1.gitcoin.co${window.location.pathname}${window.location.hash}`;
+    }
+  }, [roundId, alloVersion, isAfterRoundEndDate]);
+
+  const disableAddToCartButton =
+    (alloVersion === "allo-v2" && roundId.startsWith("0x")) ||
+    isAfterRoundEndDate ||
+    isBeforeRoundStartDate;
   const { projects, add, remove } = useCartStorage();
 
   const isAlreadyInCart = projects.some(
-    (project) => project.grantApplicationId === applicationId
+    (project) =>
+      project.grantApplicationId === applicationId &&
+      project.chainId === Number(chainId) &&
+      project.roundId === roundId
   );
-
-  /*TODO: projectToRender can be undefined, casting will hide that condition.*/
   const cartProject = projectToRender as CartProject;
 
   if (cartProject !== undefined) {
@@ -149,19 +201,21 @@ export default function ViewProjectDetails() {
   const {
     projectMetadata: { title, description = "", bannerImg },
   } = projectToRender ?? { projectMetadata: {} };
-
   const projectDetailsTabs = useMemo(
     () => [
       {
         name: "Project details",
         content: (
           <>
-            <h3 className="text-3xl mt-8 mb-4 font-medium text-black">About</h3>
+            <h3 className="text-3xl mt-8 mb-4 font-modern-era-medium text-blue-800">
+              About
+            </h3>
             {projectToRender ? (
               <>
                 <Detail text={description} testID="project-metadata" />
                 <ApplicationFormAnswers
                   answers={projectToRender.grantApplicationFormAnswers}
+                  round={roundDetails}
                 />
               </>
             ) : (
@@ -171,11 +225,25 @@ export default function ViewProjectDetails() {
         ),
       },
       {
-        name: "Grants",
-        content: <GrantList grants={grants} />,
+        name: "Impact Measurement",
+        content: (
+          <React.Fragment>
+            <StatList stats={stats} />
+            <GrantList
+              grants={grants}
+              displayKarmaAttribution={
+                grants.length > 0 && impacts.length === 0
+              }
+            />
+            <ImpactList
+              impacts={impacts}
+              displayKarmaAttribution={impacts.length > 0}
+            />
+          </React.Fragment>
+        ),
       },
     ],
-    [grants, projectToRender, description]
+    [stats, grants, projectToRender, description, impacts, roundDetails]
   );
 
   const handleTabChange = (tabIndex: number) => {
@@ -185,9 +253,20 @@ export default function ViewProjectDetails() {
   return (
     <>
       <DefaultLayout>
-        {isAfterRoundEndDate && <RoundEndedBanner />}
-        <div className="py-8 flex items-center" data-testid="bread-crumbs">
-          <Breadcrumb items={breadCrumbs} />
+        {isAfterRoundEndDate && (
+          <div className="relative top-6">
+            <RoundEndedBanner />
+          </div>
+        )}
+        <div className="flex flex-row justify-between my-8">
+          <div className="flex items-center pt-2" data-testid="bread-crumbs">
+            <Breadcrumb items={breadCrumbs} />
+          </div>
+          {walletAddress && round && isSybilDefenseEnabled && (
+            <div data-testid="passport-widget">
+              <PassportWidget round={round} alignment="right" />
+            </div>
+          )}
         </div>
         <div className="mb-4">
           <ProjectBanner
@@ -209,7 +288,7 @@ export default function ViewProjectDetails() {
               isAlreadyInCart={isAlreadyInCart}
               isBeforeRoundEndDate={!disableAddToCartButton}
               removeFromCart={() => {
-                remove(applicationId);
+                remove(cartProject);
               }}
               addToCart={() => {
                 add(cartProject);
@@ -217,10 +296,12 @@ export default function ViewProjectDetails() {
             />
           )}
           <div className="flex-1">
-            {error === undefined ? (
+            {error === undefined &&
+            !isLoading &&
+            projectToRender !== undefined ? (
               <>
                 <Skeleton isLoaded={Boolean(title)}>
-                  <h1 className="text-4xl font-medium tracking-tight text-black">
+                  <h1 className="text-4xl font-modern-era-medium tracking-tight text-grey-500">
                     {title}
                   </h1>
                 </Skeleton>
@@ -235,7 +316,7 @@ export default function ViewProjectDetails() {
                 </div>
               </>
             ) : (
-              <p>Couldn't load project data.</p>
+              <p>Couldn't load project data. It may not exist.</p>
             )}
           </div>
         </div>
@@ -253,7 +334,6 @@ function ProjectDetailsTabs(props: {
     <Box className="" bottom={0.5}>
       {props.tabs.length > 0 && (
         <Tabs
-          // className="text-blue-300"
           display="flex"
           onChange={props.onChange}
           defaultIndex={props.selected}
@@ -267,36 +347,6 @@ function ProjectDetailsTabs(props: {
   );
 }
 
-function useVerifyProject(project?: Project) {
-  const { credentials = {} } = project?.projectMetadata ?? {};
-  const dataLayer = useDataLayer();
-
-  // Return data as { twitter?: boolean, ... }
-  return useSWR<{ [K in Lowercase<PROVIDER_ID>]?: boolean }>(credentials, () =>
-    Promise.all(
-      // Check verifications for all credentials in project metadata
-      Object.entries(credentials).map(async ([provider, credential]) => ({
-        provider,
-        verified: await isVerified({
-          dataLayer,
-          verifiableCredential: credential,
-          provider,
-          project,
-        }),
-      }))
-    ).then((verifications) =>
-      // Convert to object ({ [provider]: isVerified })
-      verifications.reduce(
-        (acc, x) => ({
-          ...acc,
-          [x.provider]: x.verified === VerifiedCredentialState.VALID,
-        }),
-        {}
-      )
-    )
-  );
-}
-
 function ProjectLinks({ project }: { project?: Project }) {
   const {
     recipient,
@@ -306,13 +356,22 @@ function ProjectLinks({ project }: { project?: Project }) {
       projectTwitter,
       projectGithub,
       userGithub,
+      credentials,
     },
   } = project ?? { projectMetadata: {} };
 
   // @ts-expect-error Temp until viem (could also cast recipient as Address or update the type)
   const ens = useEnsName({ address: recipient, enabled: Boolean(recipient) });
 
-  const verified = useVerifyProject(project);
+  const { isValid: validTwitterCredential } = useValidateCredential(
+    credentials?.twitter,
+    projectTwitter
+  );
+
+  const { isValid: validGithubCredential } = useValidateCredential(
+    credentials?.github,
+    projectGithub
+  );
 
   const createdOn =
     createdAt &&
@@ -326,7 +385,7 @@ function ProjectLinks({ project }: { project?: Project }) {
       }`}
     >
       <ProjectLink icon={EthereumIcon}>
-        {ens.data || truncate(recipient)}
+        <CopyToClipboard text={ens.data || recipient} />
       </ProjectLink>
       <ProjectLink icon={CalendarIcon}>{createdOn}</ProjectLink>
       <ProjectLink url={website} icon={GlobeIcon}>
@@ -336,7 +395,7 @@ function ProjectLinks({ project }: { project?: Project }) {
         <ProjectLink
           url={`https://twitter.com/${projectTwitter}`}
           icon={TwitterIcon}
-          isVerified={verified.data?.twitter}
+          isVerified={validTwitterCredential}
         >
           {projectTwitter}
         </ProjectLink>
@@ -345,7 +404,7 @@ function ProjectLinks({ project }: { project?: Project }) {
         <ProjectLink
           url={`https://github.com/${projectGithub}`}
           icon={GithubIcon}
-          isVerified={verified.data?.github}
+          isVerified={validGithubCredential}
         >
           {projectGithub}
         </ProjectLink>
@@ -377,7 +436,7 @@ function ProjectLink({
         <Component
           href={url}
           target="_blank"
-          className={url && "text-blue-200 hover:underline"}
+          className={url && "text-blue-300 hover:underline"}
         >
           {children}
         </Component>
@@ -389,7 +448,7 @@ function ProjectLink({
 
 function VerifiedBadge() {
   return (
-    <span className="bg-teal-100 flex gap-2 rounded-full px-2 text-xs items-center font-medium text-teal-500">
+    <span className="bg-teal-100 flex gap-2 rounded-full px-2 text-xs items-center font-modern-era-medium text-teal-500">
       <ShieldCheckIcon className="w-4 h-4" />
       Verified
     </span>
@@ -402,7 +461,7 @@ function Detail(props: { text: string; testID: string }) {
       dangerouslySetInnerHTML={{
         __html: renderToHTML(props.text.replace(/\n/g, "\n\n")),
       }}
-      className="text-md prose prose-h1:text-lg prose-h2:text-base prose-h3:text-base prose-a:text-blue-600 max-w-full"
+      className="text-blue-800 text-md prose prose-h1:text-lg prose-h2:text-base prose-h3:text-base prose-a:text-blue-600 max-w-full"
       data-testid={props.testID}
     />
   );
@@ -410,9 +469,27 @@ function Detail(props: { text: string; testID: string }) {
 
 function ApplicationFormAnswers(props: {
   answers: GrantApplicationFormAnswer[];
+  round: Round | undefined;
 }) {
-  // only show answers that are not empty and are not marked as hidden
-  const answers = props.answers.filter((a) => !!a.answer && !a.hidden);
+  const roundQuestions = props.round?.applicationQuestions as (BaseQuestion &
+    RoundApplicationQuestion)[];
+  let answers: GrantApplicationFormAnswer[] = [];
+  if (roundQuestions) {
+    answers = roundQuestions
+      .filter((q) => !q.hidden && !q.encrypted)
+      .map((q) => ({
+        ...props.answers.find(
+          (a) =>
+            a.questionId === q.id && a.question === q.title && a.type === q.type
+        ),
+        question: q.title,
+      }))
+      .filter((a): a is GrantApplicationFormAnswer => !!a.answer);
+  }
+
+  if (answers.length === 0) {
+    answers = props.answers.filter((a) => !!a.answer && !a.hidden);
+  }
 
   if (answers.length === 0) {
     return null;
@@ -420,7 +497,7 @@ function ApplicationFormAnswers(props: {
 
   return (
     <div>
-      <h1 className="text-2xl mt-8 font-thin text-black">
+      <h1 className="text-2xl mt-8 font-thin text-blue-800">
         Additional Information
       </h1>
       <div>
@@ -430,7 +507,7 @@ function ApplicationFormAnswers(props: {
             : answer.answer;
           return (
             <div key={answer.questionId}>
-              <p className="text-md mt-8 mb-3 font-semibold text-black">
+              <p className="text-md mt-8 mb-3 font-semibold text-blue-800">
                 {answer.question}
               </p>
               {answer.type === "paragraph" ? (
@@ -442,7 +519,7 @@ function ApplicationFormAnswers(props: {
                 ></p>
               ) : (
                 <p
-                  className="text-base text-black"
+                  className="text-base text-blue-800"
                   dangerouslySetInnerHTML={{
                     __html: renderToHTML(answerText.replace(/\n/g, "\n\n")),
                   }}
@@ -456,11 +533,10 @@ function ApplicationFormAnswers(props: {
   );
 }
 
-const ipfsGateway = process.env.REACT_APP_PINATA_GATEWAY;
+const ipfsGateway = process.env.REACT_APP_IPFS_BASE_URL;
+
 function ProjectLogo({ logoImg }: { logoImg?: string }) {
-  const src = logoImg
-    ? `https://${ipfsGateway}/ipfs/${logoImg}`
-    : DefaultLogoImage;
+  const src = logoImg ? `${ipfsGateway}/ipfs/${logoImg}` : DefaultLogoImage;
 
   return (
     <img
@@ -477,32 +553,49 @@ function Sidebar(props: {
   removeFromCart: () => void;
   addToCart: () => void;
 }) {
+  const { chainId, roundId, applicationId } = useProjectDetailsParams();
+  const dataLayer = useDataLayer();
+
+  const { data: application } = useApplication(
+    {
+      chainId: Number(chainId as string),
+      roundId,
+      applicationId: applicationId,
+    },
+    dataLayer
+  );
+
   return (
-    <div className="min-w-[320px] mb-6">
-      <ProjectStats />
-      {props.isBeforeRoundEndDate && (
-        <CartButtonToggle
-          isAlreadyInCart={props.isAlreadyInCart}
-          addToCart={props.addToCart}
-          removeFromCart={props.removeFromCart}
-        />
+    <div>
+      <div className="min-w-[320px] h-fit mb-6 rounded-3xl bg-gray-50">
+        <ProjectStats application={application} />
+        {props.isBeforeRoundEndDate && (
+          <CartButtonToggle
+            isAlreadyInCart={props.isAlreadyInCart}
+            addToCart={props.addToCart}
+            removeFromCart={props.removeFromCart}
+          />
+        )}
+      </div>
+      {!props.isBeforeRoundEndDate && (
+        <a
+          href={`/#/projects/${application?.project.id}`}
+          target="_blank"
+          className="mt-4 flex font-bold justify-center border rounded-lg px-4 py-2"
+        >
+          <ArrowTrendingUpIcon className="w-4 h-4 inline-block mt-1 mr-2" />
+          View history
+          <LinkIcon className="w-4 h-4 ml-2 mt-1" />
+        </a>
       )}
     </div>
   );
 }
 
-export function ProjectStats() {
-  const { chainId, roundId, applicationId } = useProjectDetailsParams();
+export function ProjectStats(props: { application: Application | undefined }) {
+  const { chainId, roundId } = useProjectDetailsParams();
   const { round } = useRoundById(Number(chainId), roundId);
-  const dataLayer = useDataLayer();
-  const { data: application } = useApplication(
-    {
-      chainId: Number(chainId as string),
-      roundId,
-      applicationId: applicationId.split("-")[1],
-    },
-    dataLayer
-  );
+  const application = props.application;
 
   const timeRemaining =
     round?.roundEndTime && !isInfiniteDate(round?.roundEndTime)
@@ -513,11 +606,7 @@ export function ProjectStats() {
     (isInfiniteDate(round.roundEndTime) || round.roundEndTime > new Date());
 
   return (
-    <div
-      className={
-        "rounded-3xl bg-gray-50 mb-4 p-4 gap-4 grid grid-cols-3 md:flex md:flex-col"
-      }
-    >
+    <div className="rounded-3xl flex-auto p-3 md:p-4 gap-4 flex flex-col text-blue-800">
       <Stat
         isLoading={!application}
         value={`$${application?.totalAmountDonatedInUsd.toFixed(2)}`}
@@ -543,15 +632,15 @@ export function ProjectStats() {
           isBeforeRoundEndDate === undefined
             ? ""
             : isBeforeRoundEndDate
-            ? "to go"
-            : "Round ended"
+              ? "to go"
+              : "Round ended"
         }
       </Stat>
     </div>
   );
 }
 
-function Stat({
+export function Stat({
   value,
   children,
   isLoading,
@@ -570,94 +659,25 @@ function Stat({
   );
 }
 
-const CartButton = tw.button<{ variant?: "danger" | "default" }>`
-border
-w-full
-items-center
-justify-center
-rounded-full
-px-4
-py-2
-font-medium
-inline-flex
-gap-2
-${(props) =>
-  props.variant === "danger"
-    ? `border-red-200 hover:bg-red-50`
-    : `border-blue-200 hover:bg-blue-50`}
-`;
 function CartButtonToggle(props: {
   isAlreadyInCart: boolean;
   addToCart: () => void;
   removeFromCart: () => void;
 }) {
   return (
-    <CartButton
+    <button
+      className="font-mono bg-blue-100 hover:bg-blue-300  hover:text-grey-50 transition-all w-full items-center justify-center rounded-b-3xl rounded-t-none p-4 inline-flex gap-2"
       data-testid={props.isAlreadyInCart ? "remove-from-cart" : "add-to-cart"}
-      variant={props.isAlreadyInCart ? "danger" : "default"}
       onClick={() =>
         props.isAlreadyInCart ? props.removeFromCart() : props.addToCart()
       }
     >
-      <ShoppingCartIcon className="w-4 h-4" />
-      {props.isAlreadyInCart ? "Remove from cart" : "Add to cart"}
-    </CartButton>
+      {props.isAlreadyInCart ? (
+        <CheckIcon className="w-5 h-5" />
+      ) : (
+        <ShoppingCartIcon className="w-5 h-5" />
+      )}
+      {props.isAlreadyInCart ? "Added to cart" : "Add to cart"}
+    </button>
   );
-}
-
-function vcProviderMatchesProject(
-  provider: string,
-  verifiableCredential: VerifiableCredential,
-  project: Project | undefined
-) {
-  let vcProviderMatchesProject = false;
-  if (provider === "twitter") {
-    vcProviderMatchesProject =
-      verifiableCredential.credentialSubject.provider
-        ?.split("#")[1]
-        .toLowerCase() ===
-      project?.projectMetadata.projectTwitter?.toLowerCase();
-  } else if (provider === "github") {
-    vcProviderMatchesProject =
-      verifiableCredential.credentialSubject.provider
-        ?.split("#")[1]
-        .toLowerCase() ===
-      project?.projectMetadata.projectGithub?.toLowerCase();
-  }
-  return vcProviderMatchesProject;
-}
-
-function vcIssuedToAddress(vc: VerifiableCredential, address: string) {
-  const vcIdSplit = vc.credentialSubject.id.split(":");
-  const addressFromId = vcIdSplit[vcIdSplit.length - 1];
-  return addressFromId === address;
-}
-
-async function isVerified(args: {
-  verifiableCredential: VerifiableCredential;
-  provider: string;
-  project: Project | undefined;
-  dataLayer: DataLayer;
-}) {
-  const { verifiableCredential, provider, project, dataLayer } = args;
-
-  const { isVerified: vcHasValidProof } =
-    await dataLayer.verifyPassportCredential(verifiableCredential);
-
-  const vcIssuedByValidIAMServer = verifiableCredential.issuer === IAM_SERVER;
-  const providerMatchesProject = vcProviderMatchesProject(
-    provider,
-    verifiableCredential,
-    project
-  );
-  const vcIssuedToAtLeastOneProjectOwner = (
-    project?.projectMetadata?.owners ?? []
-  ).some((owner) => vcIssuedToAddress(verifiableCredential, owner.address));
-
-  return vcHasValidProof &&
-    vcIssuedByValidIAMServer &&
-    providerMatchesProject &&
-    vcIssuedToAtLeastOneProjectOwner
-    ? VerifiedCredentialState.VALID
-    : VerifiedCredentialState.INVALID;
 }

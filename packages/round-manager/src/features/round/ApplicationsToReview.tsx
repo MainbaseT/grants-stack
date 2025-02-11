@@ -20,6 +20,7 @@ import {
   GrantApplication,
   ProgressStatus,
   ProgressStep,
+  ProjectStatus,
 } from "../api/types";
 import ConfirmationModal from "../common/ConfirmationModal";
 import {
@@ -34,38 +35,16 @@ import ProgressModal from "../common/ProgressModal";
 import { errorModalDelayMs } from "../../constants";
 import ErrorModal from "../common/ErrorModal";
 import { getRoundStrategyType, renderToPlainText, useAllo } from "common";
-import { useWallet } from "../common/Auth";
-import { roundApplicationsToCSV } from "../api/exports";
 import { CheckIcon } from "@heroicons/react/solid";
 import { useApplicationsByRoundId } from "../common/useApplicationsByRoundId";
-
-async function exportAndDownloadCSV(roundId: string, chainId: number) {
-  const csv = await roundApplicationsToCSV(roundId, chainId);
-
-  // create a download link and click it
-  const outputBlob = new Blob([csv], {
-    type: "text/csv;charset=utf-8;",
-  });
-
-  const link = document.createElement("a");
-
-  try {
-    const dataUrl = URL.createObjectURL(outputBlob);
-    link.setAttribute("href", dataUrl);
-    link.setAttribute("download", `applications-${roundId}.csv`);
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-  } finally {
-    document.body.removeChild(link);
-  }
-}
+import { exportAndDownloadCSV } from "./ApplicationsToApproveReject";
+import { useAccount } from "wagmi";
 
 // Move applications received in direct grants to In Review
 
 export default function ApplicationsToReview() {
   const { id } = useParams();
-  const { chain } = useWallet();
+  const { chainId } = useAccount();
 
   if (id === undefined) {
     throw new Error("id is undefined");
@@ -75,7 +54,9 @@ export default function ApplicationsToReview() {
   const allo = useAllo();
   const filteredApplications =
     applications?.filter(
-      (a) => a.status === ApplicationStatus.PENDING.toString() && !a.inReview
+      (a) =>
+        a.status === ApplicationStatus.PENDING.toString() &&
+        !(a.status === "IN_REVIEW")
     ) || [];
 
   const [bulkSelect, setBulkSelect] = useState(false);
@@ -125,9 +106,11 @@ export default function ApplicationsToReview() {
             recipient: application.recipient,
             projectsMetaPtr: application.projectsMetaPtr,
             status: application.status,
-            inReview: application.inReview,
+            inReview: application.status === "IN_REVIEW",
             applicationIndex: application.applicationIndex,
             createdAt: application.createdAt,
+            distributionTransaction: application.distributionTransaction,
+            anchorAddress: application.anchorAddress,
           };
         })
       );
@@ -151,10 +134,12 @@ export default function ApplicationsToReview() {
     window.location.reload();
   };
 
-  const toggleSelection = (id: string) => {
+  const toggleApproval = (id: string) => {
     const newState = selected?.map((grantApp: GrantApplication) => {
       if (grantApp.id === id) {
-        return { ...grantApp, inReview: !grantApp.inReview };
+        const newStatus: ProjectStatus =
+          grantApp.status === "IN_REVIEW" ? "PENDING" : "IN_REVIEW";
+        return { ...grantApp, status: newStatus };
       }
 
       return grantApp;
@@ -168,7 +153,7 @@ export default function ApplicationsToReview() {
       (grantApp: GrantApplication) => grantApp.id === id
     );
     if (!selectedApplication) return false;
-    return Boolean(selectedApplication.inReview);
+    return selectedApplication.status === "IN_REVIEW";
   };
 
   const handleBulkReview = async () => {
@@ -195,7 +180,7 @@ export default function ApplicationsToReview() {
         ),
         roundStrategyAddress: applications[0].payoutStrategy.id,
         selectedApplications: selected.filter(
-          (application) => application.inReview
+          (application) => application.status === "IN_REVIEW"
         ),
       });
       setBulkSelect(false);
@@ -207,9 +192,19 @@ export default function ApplicationsToReview() {
   };
 
   async function handleExportCsvClick(roundId: string, chainId: number) {
+    if (
+      applications === undefined ||
+      applications[0].payoutStrategy?.id === undefined
+    ) {
+      return;
+    }
     try {
       setIsCsvExportLoading(true);
-      await exportAndDownloadCSV(roundId, chainId);
+      await exportAndDownloadCSV(
+        roundId,
+        chainId,
+        roundId.startsWith("0x") ? roundId : applications[0].payoutStrategy.id
+      );
     } catch (e) {
       datadogLogs.logger.error(
         `error: exportApplicationCsv - ${e}, id: ${roundId}`
@@ -223,13 +218,13 @@ export default function ApplicationsToReview() {
   return (
     <div>
       <div className="flex items-center mb-4">
-        {id && applications && applications.length > 0 && (
+        {id && applications && applications.length > 0 && chainId && (
           <Button
             type="button"
             $variant="outline"
             className="text-xs px-3 py-1 inline-block"
             disabled={isCsvExportLoading}
-            onClick={() => handleExportCsvClick(utils.getAddress(id), chain.id)}
+            onClick={() => handleExportCsvClick(utils.getAddress(id), chainId)}
           >
             {isCsvExportLoading ? (
               <>
@@ -270,7 +265,7 @@ export default function ApplicationsToReview() {
                 <ApplicationHeader
                   bulkSelect={bulkSelect}
                   applicationStatus={checkSelectionStatus(application.id)}
-                  inReviewOnClick={() => toggleSelection(application.id)}
+                  inReviewOnClick={() => toggleApproval(application.id)}
                   application={application}
                 />
               </CardHeader>
@@ -291,60 +286,65 @@ export default function ApplicationsToReview() {
           <NoApplicationsContent />
         )}
       </CardsContainer>
-      {selected && selected?.filter((obj) => obj.inReview).length > 0 && (
-        <>
-          <div className="fixed w-full left-0 bottom-0 bg-white z-20">
-            <hr />
-            <div className="flex justify-end items-center py-5 pr-20">
-              <NumberOfApplicationsSelectedMessage
-                grantApplications={selected}
-                predicate={(selected) => Boolean(selected.inReview)}
-              />
-              <Continue onClick={() => setOpenModal(true)} />
+      {selected &&
+        selected?.filter((obj) => obj.status === "IN_REVIEW").length > 0 && (
+          <>
+            <div className="fixed w-full left-0 bottom-0 bg-white z-20">
+              <hr />
+              <div className="flex justify-end items-center py-5 pr-20">
+                <NumberOfApplicationsSelectedMessage
+                  grantApplications={selected}
+                  predicate={(selected) => selected.status === "IN_REVIEW"}
+                />
+                <Continue onClick={() => setOpenModal(true)} />
+              </div>
             </div>
-          </div>
-          <ConfirmationModal
-            title={"Confirm Decision"}
-            confirmButtonText={
-              isBulkUpdateLoading ? "Confirming..." : "Confirm"
-            }
-            body={
-              <>
-                <p className="text-sm text-grey-400">
-                  You have selected multiple Grant Applications to move them to
-                  "In Review" state.
-                </p>
-                <div className="flex my-8 gap-16 justify-center items-center text-center">
-                  <div
-                    className="grid gap-2"
-                    data-testid="approved-applications-count"
-                  >
-                    <i className="flex justify-center">
-                      <CheckIcon
-                        className="bg-teal-400 text-grey-500 rounded-full h-6 w-6 p-1"
-                        aria-hidden="true"
-                      />
-                    </i>
-                    <>
-                      <span className="text-xs text-grey-400 font-semibold text-center mt-2">
-                        In review
-                      </span>
-                      <span className="text-grey-500 font-semibold">
-                        {selected?.filter((obj) => obj.inReview).length}
-                      </span>
-                    </>
+            <ConfirmationModal
+              title={"Confirm Decision"}
+              confirmButtonText={
+                isBulkUpdateLoading ? "Confirming..." : "Confirm"
+              }
+              body={
+                <>
+                  <p className="text-sm text-grey-400">
+                    You have selected multiple Grant Applications to move them
+                    to "In Review" state.
+                  </p>
+                  <div className="flex my-8 gap-16 justify-center items-center text-center">
+                    <div
+                      className="grid gap-2"
+                      data-testid="approved-applications-count"
+                    >
+                      <i className="flex justify-center">
+                        <CheckIcon
+                          className="bg-teal-400 text-grey-500 rounded-full h-6 w-6 p-1"
+                          aria-hidden="true"
+                        />
+                      </i>
+                      <>
+                        <span className="text-xs text-grey-400 font-semibold text-center mt-2">
+                          In review
+                        </span>
+                        <span className="text-grey-500 font-semibold">
+                          {
+                            selected?.filter(
+                              (obj) => obj.status === "IN_REVIEW"
+                            ).length
+                          }
+                        </span>
+                      </>
+                    </div>
                   </div>
-                </div>
-                <AdditionalGasFeesNote />
-              </>
-            }
-            confirmButtonAction={handleBulkReview}
-            cancelButtonAction={() => setOpenModal(false)}
-            isOpen={openModal}
-            setIsOpen={setOpenModal}
-          />
-        </>
-      )}
+                  <AdditionalGasFeesNote />
+                </>
+              }
+              confirmButtonAction={handleBulkReview}
+              cancelButtonAction={() => setOpenModal(false)}
+              isOpen={openModal}
+              setIsOpen={setOpenModal}
+            />
+          </>
+        )}
       <ProgressModal
         isOpen={openProgressModal}
         subheading={"Please hold while we update the grant applications."}

@@ -26,12 +26,13 @@ export function EmptyCart() {
               }
             }}
             payoutTokenOptions={[]}
+            balanceWarning={false}
           />
           <Button
             type="button"
             disabled={true}
             $variant="outline"
-            className="text-xs px-0 md:px-4 py-2 text-purple-600 border-0"
+            className="text-sm px-0 md:px-4 py-2 text-blue-200 border-0"
           >
             Apply to all
           </Button>

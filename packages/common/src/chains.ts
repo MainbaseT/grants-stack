@@ -1,422 +1,149 @@
-import { Chain } from "@rainbow-me/rainbowkit";
-import {
-  avalanche as avalancheOriginal,
-  avalancheFuji as avalancheFujiOriginal,
-  base as baseOriginal,
-  fantom as fantomOriginal,
-  fantomTestnet as fantomTestnetOriginal,
-  sepolia as ethereumSepolia,
-  zkSync as zkSyncOriginal,
-  zkSyncTestnet as zkSyncTestnetOriginal,
-} from "@wagmi/chains";
-import { ChainId } from "./chain-ids";
-import { getConfig } from "./config";
+import { zeroAddress } from "viem";
 import { error, Result, success } from "./allo/common";
+import { getChains, TChain } from "@gitcoin/gitcoin-chain-data";
+import { Chain } from "@rainbow-me/rainbowkit";
 
-export const PublicGoodsNetworkIcon =
-  "https://ipfs.io/ipfs/Qmagrvn2SY5TEoLgqUtcc1745ABZTFoPmod37tW37u7HYo";
-export const ZkSyncIcon =
-  "https://ipfs.io/ipfs/QmUcGLhpBWRXD3CMbXZQT99adetptxXPqQYA6Pghb4WKSR";
-export const BaseLogo =
-  "https://ipfs.io/ipfs/QmQaAsfJpUuKmpX3eJEzgdZjqqFWmWHXnDy3MpPVJyDzcj";
-export const FantomFTMLogo =
-  "https://ipfs.io/ipfs/QmRJgxRqXUpHeskg48qeehUK97FzCAY7espZhTAVdrh9B9";
-export const ScrollIcon =
-  "https://ipfs.io/ipfs/QmYRA5tXMmGxhw7HUNdr9DYN2GRX3MnLoJVweeWKgfxBZX";
+const chainData = getChains();
 
-const config = getConfig();
-
-export const fantom: Chain = {
-  ...fantomOriginal,
-  rpcUrls: {
-    default: {
-      http: ["https://rpcapi.fantom.network/"],
-    },
-    public: {
-      http: ["https://rpcapi.fantom.network/"],
-    },
-  },
-  iconUrl: FantomFTMLogo,
+const rpcUrls: { [key: number]: string | undefined } = {
+  1: "https://eth-mainnet.g.alchemy.com/v2/",
+  10: "https://opt-mainnet.g.alchemy.com/v2/",
+  100: "https://gnosis-mainnet.g.alchemy.com/v2/",
+  42: "https://rpc.mainnet.lukso.network",
+  137: "https://polygon-mainnet.g.alchemy.com/v2/",
+  // 250: "", // fantom
+  300: "https://zksync-sepolia.g.alchemy.com/v2/",
+  324: "https://zksync-mainnet.g.alchemy.com/v2/",
+  // 4201: "", // lukso test
+  1088: "https://metis-mainnet.g.alchemy.com/v2/",
+  8453: "https://base-mainnet.g.alchemy.com/v2/",
+  42161: "https://arb-mainnet.g.alchemy.com/v2/",
+  42220: "https://celo-mainnet.infura.io/v3/", // celo
+  43113: "https://avalanche-fuji.infura.io/v3/", // fuji
+  43114: "https://avalanche-mainnet.infura.io/v3/", // avax
+  44787: "https://celo-alfajores.infura.io/v3/", // alfajores
+  // 80001: "https://polygon-mumbai.g.alchemy.com/v2/", // not supported anymore
+  // 534351: "", // scroll sepolia
+  // 534352: "", // scroll mainnet
+  // 1329: "", // sei
+  // 713715: "", // sei devnet
+  11155111: "https://eth-sepolia.g.alchemy.com/v2/",
 };
 
-export const fantomTestnet: Chain = {
-  ...fantomTestnetOriginal,
-  rpcUrls: {
-    default: {
-      http: ["https://rpc.testnet.fantom.network/"],
+export const getRpcUrl = (chain: TChain): string => {
+  let envRpc = rpcUrls[chain.id] ?? chain.rpc;
+
+  if (envRpc.includes("alchemy"))
+    envRpc = process.env.REACT_APP_ALCHEMY_ID
+      ? envRpc + process.env.REACT_APP_ALCHEMY_ID
+      : chain.rpc;
+  if (envRpc.includes("infura"))
+    envRpc = process.env.REACT_APP_INFURA_ID
+      ? envRpc + process.env.REACT_APP_INFURA_ID
+      : chain.rpc;
+
+  return envRpc;
+};
+export function stringToBlobUrl(data: string): string {
+  const blob = new Blob([data], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  return url;
+}
+
+const parseRainbowChain = (chain: TChain) => {
+  const nativeToken = chain.tokens.find(
+    (token) => token.address === zeroAddress
+  );
+
+  const rpc = getRpcUrl(chain);
+
+  // Map the TChain to @rainbow-me/rainbowkit/Chain
+  const mappedChain: Chain = {
+    id: chain.id,
+    name: chain.prettyName,
+    iconUrl: stringToBlobUrl(chain.icon),
+    iconBackground: "rgba(255, 255, 255, 0)",
+    nativeCurrency: {
+      name: nativeToken?.code as string,
+      symbol: nativeToken?.code as string,
+      decimals: nativeToken?.decimals as number,
     },
-    public: {
-      http: ["https://rpc.testnet.fantom.network/"],
+    rpcUrls: {
+      default: {
+        http: [rpc],
+        webSocket: undefined,
+      },
+      public: {
+        http: [chain.rpc],
+        webSocket: undefined,
+      },
     },
-  },
-  iconUrl: FantomFTMLogo,
+    contracts: {
+      ensUniversalResolver: {
+        address: chain.contracts.ensUniversalResolver ?? zeroAddress,
+      },
+    },
+  } as const satisfies Chain;
+  return mappedChain;
 };
 
-export const avalancheFuji: Chain = {
-  ...avalancheFujiOriginal,
-  rpcUrls: {
-    default: {
-      http: [
-        "https://avalanche-fuji.infura.io/v3/1e0a90928efe4bb78bb1eeceb8aacc27",
-      ],
-    },
-    public: {
-      http: ["https://api.avax-test.network/ext/bc/C/rpc"],
-    },
-  },
-};
+export const allNetworks = chainData.map(parseRainbowChain);
+export const testnetNetworks = chainData
+  .filter((chain) => chain.type === "testnet")
+  .map(parseRainbowChain);
+export const mainnetNetworks = chainData
+  .filter((chain) => chain.type === "mainnet")
+  .map(parseRainbowChain);
 
-export const base: Chain = {
-  ...baseOriginal,
-  iconUrl: BaseLogo,
-  rpcUrls: {
-    default: {
-      http: [
-        `https://base-mainnet.g.alchemy.com/v2/${config.blockchain.alchemyId}`,
-      ],
+export const chainIds = chainData.map((chain) => chain.id);
+export const redstoneTokenIds = chainData
+  .flatMap((chain) => chain.tokens.map((token) => token.redstoneTokenId))
+  .filter((tokenId) => tokenId !== undefined)
+  .reduce(
+    (acc, tokenId) => {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      acc[tokenId!] = tokenId!;
+      return acc;
     },
-    public: {
-      http: ["https://mainnet.base.org/"],
-    },
-  },
-};
+    {} as { [key: string]: string }
+  );
 
-export const avalanche: Chain = {
-  ...avalancheOriginal,
-  rpcUrls: {
-    default: {
-      http: [
-        "https://avalanche-mainnet.infura.io/v3/1e0a90928efe4bb78bb1eeceb8aacc27",
-      ],
-    },
-    public: {
-      http: ["https://api.avax.network/ext/bc/C/rpc"],
-    },
-  },
-};
-
-export const zkSyncEraTestnet: Chain = {
-  ...zkSyncTestnetOriginal,
-  iconUrl: ZkSyncIcon,
-  rpcUrls: {
-    default: {
-      http: ["https://testnet.era.zksync.dev"],
-    },
-    public: {
-      http: ["https://testnet.era.zksync.dev"],
-    },
-  },
-};
-
-export const zkSyncEraMainnet: Chain = {
-  ...zkSyncOriginal,
-  iconUrl: ZkSyncIcon,
-  rpcUrls: {
-    default: {
-      http: ["https://mainnet.era.zksync.io"],
-    },
-    public: {
-      http: ["https://mainnet.era.zksync.io"],
-    },
-  },
-};
-
-export const scroll: Chain = {
-  id: 534352,
-  name: "Scroll",
-  network: "scroll",
-  iconUrl: ScrollIcon,
-  nativeCurrency: {
-    decimals: 18,
-    name: "Ether",
-    symbol: "ETH",
-  },
-  rpcUrls: {
-    default: {
-      http: ["https://rpc.scroll.io"],
-    },
-    public: {
-      http: ["https://rpc.scroll.io"],
-    },
-  },
-  blockExplorers: {
-    default: {
-      name: "Scrollscan",
-      url: "https://scrollscan.com/",
-    },
-  },
-};
-
-export const pgnTestnet: Chain = {
-  id: 58008,
-  name: "PGN Testnet",
-  network: "pgn testnet",
-  iconUrl: PublicGoodsNetworkIcon,
-  nativeCurrency: {
-    decimals: 18,
-    name: "Ether",
-    symbol: "ETH",
-  },
-  rpcUrls: {
-    default: {
-      http: ["https://sepolia.publicgoods.network"],
-    },
-    public: {
-      http: ["https://sepolia.publicgoods.network"],
-    },
-  },
-  blockExplorers: {
-    default: {
-      name: "pgnscan",
-      url: "https://explorer.sepolia.publicgoods.network",
-    },
-  },
-  testnet: true,
-};
-
-export const pgn: Chain = {
-  id: 424,
-  name: "PGN",
-  network: "pgn",
-  iconUrl: PublicGoodsNetworkIcon,
-  nativeCurrency: {
-    decimals: 18,
-    name: "Ether",
-    symbol: "ETH",
-  },
-  rpcUrls: {
-    default: {
-      http: ["https://rpc.publicgoods.network"],
-    },
-    public: {
-      http: ["https://rpc.publicgoods.network"],
-    },
-  },
-  blockExplorers: {
-    default: {
-      name: "pgnscan",
-      url: "https://explorer.publicgoods.network",
-    },
-  },
-};
-
-export const customOptimism = {
-  id: 10,
-  name: "Optimism",
-  network: "optimism",
-  nativeCurrency: {
-    name: "Ether",
-    symbol: "ETH",
-    decimals: 18,
-  },
-  rpcUrls: {
-    alchemy: {
-      http: ["https://opt-mainnet.g.alchemy.com/v2/"],
-      webSocket: ["wss://opt-mainnet.g.alchemy.com/v2/"],
-    },
-    infura: {
-      http: ["https://optimism-mainnet.infura.io/v3/"],
-      webSocket: ["wss://optimism-mainnet.infura.io/ws/v3"],
-    },
-    default: {
-      http: [
-        `https://optimism-mainnet.infura.io/v3/${config.blockchain.infuraId}`,
-      ],
-    },
-    public: {
-      http: [
-        `https://optimism-mainnet.infura.io/v3/${config.blockchain.infuraId}`,
-      ],
-    },
-  },
-  blockExplorers: {
-    etherscan: {
-      name: "Etherscan",
-      url: "https://optimistic.etherscan.io",
-    },
-    default: {
-      name: "Optimism Explorer",
-      url: "https://explorer.optimism.io",
-    },
-  },
-};
-
-export const customPolygon = {
-  id: 137,
-  name: "Polygon",
-  network: "matic",
-  nativeCurrency: {
-    name: "MATIC",
-    symbol: "MATIC",
-    decimals: 18,
-  },
-  rpcUrls: {
-    alchemy: {
-      http: ["https://polygon-mainnet.g.alchemy.com/v2"],
-      webSocket: ["wss://polygon-mainnet.g.alchemy.com/v2"],
-    },
-    infura: {
-      http: ["https://polygon-mainnet.infura.io/v3"],
-      webSocket: ["wss://polygon-mainnet.infura.io/ws/v3"],
-    },
-    default: {
-      http: [
-        `https://polygon-mainnet.infura.io/v3/${config.blockchain.infuraId}`,
-      ],
-    },
-    public: {
-      http: [
-        `https://polygon-mainnet.infura.io/v3/${config.blockchain.infuraId}`,
-      ],
-    },
-  },
-  blockExplorers: {
-    etherscan: {
-      name: "PolygonScan",
-      url: "https://polygonscan.com",
-    },
-    default: {
-      name: "PolygonScan",
-      url: "https://polygonscan.com",
-    },
-  },
-};
-
-export const customMainnet = {
-  id: 1,
-  network: "homestead",
-  name: "Ethereum",
-  nativeCurrency: {
-    name: "Ether",
-    symbol: "ETH",
-    decimals: 18,
-  },
-  rpcUrls: {
-    alchemy: {
-      http: ["https://eth-mainnet.g.alchemy.com/v2"],
-      webSocket: ["wss://eth-mainnet.g.alchemy.com/v2"],
-    },
-    infura: {
-      http: ["https://mainnet.infura.io/v3"],
-      webSocket: ["wss://mainnet.infura.io/ws/v3"],
-    },
-    default: {
-      http: [`https://mainnet.infura.io/v3/${config.blockchain.infuraId}`],
-    },
-    public: {
-      http: [`https://mainnet.infura.io/v3/${config.blockchain.infuraId}`],
-    },
-  },
-  blockExplorers: {
-    etherscan: {
-      name: "Etherscan",
-      url: "https://etherscan.io",
-    },
-    default: {
-      name: "Etherscan",
-      url: "https://etherscan.io",
-    },
-  },
-};
-
-export const sepolia: Chain = {
-  ...ethereumSepolia,
-  rpcUrls: {
-    default: {
-      http: [
-        `https://eth-sepolia.g.alchemy.com/v2/${config.blockchain.alchemyId}`,
-      ],
-    },
-    public: {
-      http: [
-        `https://eth-sepolia.g.alchemy.com/v2/${config.blockchain.alchemyId}`,
-      ],
-    },
-  },
-};
-
-export function parseChainIdIntoResult(
-  input: string | number
-): Result<ChainId> {
+export function parseChainIdIntoResult(input: string | number): Result<number> {
   if (typeof input === "string") {
     // If the input is a string, try to parse it as a number
     const parsedInput = parseInt(input, 10);
     if (!isNaN(parsedInput)) {
       // If parsing is successful, check if it's a valid enum value
-      if (Object.values(ChainId).includes(parsedInput)) {
-        return success(parsedInput as ChainId);
+      if (Object.values(chainIds).includes(parsedInput)) {
+        return success(parsedInput as number);
       }
     }
   } else {
     // If the input is a number, check if it's a valid enum value
-    if (Object.values(ChainId).includes(input)) {
-      return success(input as ChainId);
+    if (Object.values(chainIds).includes(input)) {
+      return success(input as number);
     }
   }
   return error(new Error("Invalid chainid"));
 }
 
-export function parseChainId(input: string | number): ChainId {
+export function parseChainId(input: string | number): number {
   if (typeof input === "string") {
     // If the input is a string, try to parse it as a number
     const parsedInput = parseInt(input, 10);
     if (!isNaN(parsedInput)) {
       // If parsing is successful, check if it's a valid enum value
-      if (Object.values(ChainId).includes(parsedInput)) {
-        return parsedInput as ChainId;
+      if (Object.values(chainIds).includes(parsedInput)) {
+        return parsedInput as number;
       }
     }
   } else if (typeof input === "number") {
     // If the input is a number, check if it's a valid enum value
-    if (Object.values(ChainId).includes(input)) {
-      return input as ChainId;
+    if (Object.values(chainIds).includes(input)) {
+      return input as number;
     }
   }
 
   // If the input is not a valid enum value, return undefined
   throw "Invalid chainId " + input;
 }
-
-export const devChain1: Chain = {
-  id: 313371,
-  name: "Development 1",
-  network: "dev1",
-  iconUrl: PublicGoodsNetworkIcon,
-  nativeCurrency: {
-    decimals: 18,
-    name: "Ether",
-    symbol: "ETH",
-  },
-  rpcUrls: {
-    default: { http: ["http://localhost:8545"] },
-    public: { http: ["http://localhost:8545"] },
-  },
-  blockExplorers: {
-    default: {
-      name: "dev1",
-      url: "",
-    },
-  },
-};
-
-export const devChain2: Chain = {
-  id: 313372,
-  name: "Development 2",
-  network: "dev2",
-  iconUrl: PublicGoodsNetworkIcon,
-  nativeCurrency: {
-    decimals: 18,
-    name: "Ether",
-    symbol: "ETH",
-  },
-  rpcUrls: {
-    default: { http: ["http://localhost:8546"] },
-    public: { http: ["http://localhost:8546"] },
-  },
-  blockExplorers: {
-    default: {
-      name: "dev2",
-      url: "",
-    },
-  },
-};

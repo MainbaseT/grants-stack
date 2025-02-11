@@ -1,23 +1,27 @@
 import { Stack } from "@chakra-ui/react";
 import { datadogRum } from "@datadog/browser-rum";
+import { getConfig } from "common/src/config";
 import { ExclamationCircleIcon } from "@heroicons/react/20/solid";
 import {
   ExclamationTriangleIcon,
   InformationCircleIcon,
 } from "@heroicons/react/24/solid";
 import {
+  ProjectApplicationWithRound,
+  RoundCategory,
+  useDataLayer,
+} from "data-layer";
+import {
   RoundApplicationAnswers,
   RoundApplicationMetadata,
 } from "data-layer/dist/roundApplication.types";
+import { getChainById, useValidateCredential } from "common";
 import { Fragment, useEffect, useState } from "react";
 import { shallowEqual, useDispatch, useSelector } from "react-redux";
 import { Link } from "react-router-dom";
-import { useNetwork } from "wagmi";
+import { useChains } from "wagmi";
 import { ValidationError } from "yup";
-import { ProjectApplicationWithRound, useDataLayer } from "data-layer";
-import { RoundCategory } from "common/dist/types";
 import { resetApplicationError } from "../../actions/roundApplication";
-import useValidateCredential from "../../hooks/useValidateCredential";
 import { RootState } from "../../reducers";
 import { editPath } from "../../routes";
 import {
@@ -27,7 +31,6 @@ import {
   ProjectOption,
   Round,
 } from "../../types";
-import { getNetworkIcon, networkPrettyName } from "../../utils/wallet";
 import Button, { ButtonVariants } from "../base/Button";
 import CallbackModal from "../base/CallbackModal";
 import ErrorModal from "../base/ErrorModal";
@@ -79,7 +82,8 @@ export default function Form({
 }) {
   const dispatch = useDispatch();
   const dataLayer = useDataLayer();
-  const { chains } = useNetwork();
+  const chains = useChains();
+  const { version } = getConfig().allo;
 
   const [projectApplications, setProjectApplications] = useState<
     ProjectApplicationWithRound[]
@@ -262,7 +266,9 @@ export default function Form({
       projectApplications.filter((app) => app.projectId === projectId).length >
       0;
 
-    setHasExistingApplication(hasProjectAppliedToRound);
+    if (version === "allo-v2") {
+      setHasExistingApplication(hasProjectAppliedToRound);
+    }
     setIsLoading(false);
     handleInput(e);
   };
@@ -286,7 +292,7 @@ export default function Form({
   };
 
   const closeErrorModal = async () => {
-    dispatch(resetApplicationError(round.address));
+    dispatch(resetApplicationError(round.id));
   };
 
   const handleSubmitApplicationRetry = async () => {
@@ -296,15 +302,18 @@ export default function Form({
 
   useEffect(() => {
     const currentOptions = props.projectIDs.map((id): ProjectOption => {
-      const chainId = props.allProjectMetadata[id]?.metadata?.chainId;
-      const projectChainIconUri = getNetworkIcon(Number(chainId));
-      const chainName = networkPrettyName(Number(chainId));
+      const chainId = props.allProjectMetadata[id]!.metadata!.chainId!;
+
+      const chain = getChainById(chainId);
+      const chainName = chain.prettyName;
+      const { icon } = chain;
+
       return {
         id,
         title: props.allProjectMetadata[id]?.metadata?.title,
         chainInfo: {
           chainId: Number(chainId),
-          icon: projectChainIconUri,
+          icon,
           chainName,
         },
       };

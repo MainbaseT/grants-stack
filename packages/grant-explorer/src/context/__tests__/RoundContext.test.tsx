@@ -16,11 +16,13 @@ describe("<ListRoundProvider />", () => {
 
   describe("useRoundById()", () => {
     it("provides round based on given round id", async () => {
-      const expectedRound = makeRoundData();
+      const expectedRound = makeRoundData({
+        chainId: 1,
+      });
       const expectedRoundId: string = expectedRound.id!;
 
       const dataLayerMock = {
-        getLegacyRoundById: vi.fn().mockResolvedValue({
+        getRoundForExplorer: vi.fn().mockResolvedValue({
           round: expectedRound,
         }),
       } as unknown as Mocked<DataLayer>;
@@ -37,11 +39,13 @@ describe("<ListRoundProvider />", () => {
     });
 
     it("sets isLoading to true when getRoundById call is in progress", async () => {
-      const expectedRound = makeRoundData();
+      const expectedRound = makeRoundData({
+        chainId: 10,
+      });
       const expectedRoundId: string = expectedRound.id!;
 
       const dataLayerMock = {
-        getLegacyRoundById: vi.fn().mockResolvedValue({
+        getRoundForExplorer: vi.fn().mockResolvedValue({
           round: expectedRound,
         }),
       } as unknown as Mocked<DataLayer>;
@@ -60,11 +64,13 @@ describe("<ListRoundProvider />", () => {
     });
 
     it("sets isLoading back to false and when getRoundById call succeeds", async () => {
-      const expectedRound = makeRoundData();
+      const expectedRound = makeRoundData({
+        chainId: 10,
+      });
       const expectedRoundId: string = expectedRound.id!;
 
       const dataLayerMock = {
-        getLegacyRoundById: vi.fn().mockResolvedValue({
+        getRoundForExplorer: vi.fn().mockResolvedValue({
           round: expectedRound,
         }),
       } as unknown as Mocked<DataLayer>;
@@ -85,11 +91,13 @@ describe("<ListRoundProvider />", () => {
     });
 
     it("sets isLoading back to false when getRoundById call fails", async () => {
-      const expectedRound = makeRoundData();
+      const expectedRound = makeRoundData({
+        chainId: 10,
+      });
       const expectedRoundId: string = expectedRound.id!;
 
       const dataLayerMock = {
-        getLegacyRoundById: vi.fn().mockRejectedValue(new Error()),
+        getRoundForExplorer: vi.fn().mockRejectedValue(new Error()),
       } as unknown as Mocked<DataLayer>;
 
       render(

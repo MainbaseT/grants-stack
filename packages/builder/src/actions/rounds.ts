@@ -1,9 +1,5 @@
-import { datadogLogs } from "@datadog/browser-logs";
-import { datadogRum } from "@datadog/browser-rum";
-import { RoundCategory } from "common/dist/types";
 import { getConfig } from "common/src/config";
-import { DataLayer } from "data-layer";
-import { ethers } from "ethers";
+import { DataLayer, RoundCategory } from "data-layer";
 import { Dispatch } from "redux";
 import { Status } from "../reducers/rounds";
 import { Round } from "../types";
@@ -63,21 +59,6 @@ export const loadRound =
   (roundId: string, dataLayer: DataLayer, chainId: number) =>
   async (dispatch: Dispatch) => {
     const { version } = getConfig().allo;
-    const isV1 = version === "allo-v1";
-
-    try {
-      if (isV1 && roundId.startsWith("0x")) {
-        ethers.utils.getAddress(roundId);
-      } else if (roundId.includes("0x")) {
-        throw new Error(`Invalid roundId ${roundId}`);
-      }
-    } catch (e) {
-      datadogRum.addError(e);
-      datadogLogs.logger.warn(`invalid address or address checksum ${roundId}`);
-      dispatch(loadingError(roundId, "invalid address or address checksum"));
-      console.error(e);
-      return;
-    }
 
     const v2Round = await dataLayer.getRoundByIdAndChainId({
       roundId,
@@ -102,8 +83,18 @@ export const loadRound =
     switch (v2Round.strategyName) {
       case "allov1.Direct":
       case "allov2.DirectGrantsSimpleStrategy":
+      case "allov2.DirectGrantsLiteStrategy":
         // application times == round times
         roundPayoutStrategy = RoundCategory.Direct;
+        applicationsStartTime =
+          Date.parse(v2Round.applicationsStartTime) / 1000;
+        applicationsEndTime = Date.parse(v2Round.applicationsEndTime) / 1000;
+        roundStartTime = Date.parse(v2Round.applicationsStartTime) / 1000;
+        roundEndTime = Date.parse(v2Round.applicationsEndTime) / 1000;
+        break;
+
+      case "allov2.EasyRetroFundingStrategy":
+        roundPayoutStrategy = RoundCategory.Retrofunding;
         applicationsStartTime =
           Date.parse(v2Round.applicationsStartTime) / 1000;
         applicationsEndTime = Date.parse(v2Round.applicationsEndTime) / 1000;
@@ -140,8 +131,9 @@ export const loadRound =
         pointer: v2Round.applicationMetadataCid,
       },
       applicationMetadata,
-      programName: v2Round.project?.name || "",
+      programName: v2Round.project.name || v2Round.project.metadata.name || "",
       payoutStrategy: roundPayoutStrategy,
+      tags: v2Round.tags,
     };
 
     dispatch(roundLoaded(roundId, round));

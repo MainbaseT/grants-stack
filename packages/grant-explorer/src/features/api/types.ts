@@ -1,7 +1,7 @@
-import { ChainId } from "common";
-import { WalletClient } from "wagmi";
+import { WalletClient } from "viem";
 
 import type { Project } from "data-layer";
+import { GetBalanceReturnType } from "@wagmi/core";
 
 export type {
   ApplicationStatus,
@@ -54,7 +54,7 @@ export interface IPFSObject {
 
 export type CartProject = Project & {
   roundId: string;
-  chainId: ChainId;
+  chainId: number;
   amount: string;
 };
 
@@ -64,3 +64,17 @@ export enum ProgressStatus {
   NOT_STARTED = "NOT_STARTED",
   IS_ERROR = "IS_ERROR",
 }
+
+export type Balance = GetBalanceReturnType & {
+  address: `0x${string}`;
+  chainId: number;
+  formattedAmount: number;
+};
+
+export type ChainBalances = {
+  [tokenAddress: string]: Balance;
+};
+
+export type BalanceMap = {
+  [chainId: string | number]: ChainBalances;
+};

@@ -1,9 +1,8 @@
-import { ChainId } from "common";
 import { RoundApplicationMetadata, RoundApplicationQuestion } from "data-layer";
 import { ethers } from "ethers";
 
 const generateUniqueRoundApplicationID = (
-  projectChainId: ChainId,
+  projectChainId: number,
   projectNumber: string,
   projectRegistryAddress: string
 ) =>
@@ -57,8 +56,6 @@ export const parseRoundApplicationMetadata = (
     };
   }
 
-  // const [major, minor, patch] = object.version.split(".").map(Number);
-  //
   metadata.applicationSchema.questions =
     metadata.applicationSchema.questions.map(
       (q: any): RoundApplicationQuestion => ({
@@ -72,13 +69,18 @@ export const parseRoundApplicationMetadata = (
       })
     );
 
+  const maxId = Math.max(
+    0,
+    ...metadata.applicationSchema.questions.map((q) => q.id)
+  );
+
   metadata.applicationSchema.questions = [
     {
-      id: metadata.applicationSchema.questions.length,
+      id: maxId + 1,
       type: "project",
     },
     {
-      id: metadata.applicationSchema.questions.length + 1,
+      id: maxId + 2,
       type: "recipient",
     },
     ...metadata.applicationSchema.questions,

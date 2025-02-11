@@ -7,7 +7,7 @@ import {
   renderWithContext,
 } from "../../../test-utils";
 import Navbar from "../Navbar";
-import type wagmi from "wagmi";
+import * as wagmi from "wagmi";
 import type rrd from "react-router-dom";
 const userAddress = faker.finance.ethereumAddress();
 
@@ -65,11 +65,6 @@ describe("<Navbar>", () => {
   it("SHOULD display connect wallet button", () => {
     renderWithContext(<Navbar customBackground="" />);
     expect(screen.getByTestId("connect-wallet-button")).toBeInTheDocument();
-  });
-
-  it("SHOULD display passport widget", () => {
-    renderWithContext(<Navbar customBackground="" />);
-    expect(screen.getByTestId("passport-widget")).toBeInTheDocument();
   });
 
   it("SHOULD display cart if round has not ended", () => {

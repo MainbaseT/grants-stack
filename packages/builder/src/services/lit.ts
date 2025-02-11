@@ -1,7 +1,8 @@
-import { ethers } from "ethers";
+import { Network, Provider } from "@ethersproject/providers";
+import { ethers, providers } from "ethers";
 import { Buffer } from "buffer";
-import { Provider } from "@wagmi/core";
-import { isJestRunning } from "common";
+import { getConfig } from "common/src/config";
+import { getChainById, isJestRunning } from "common";
 import { global } from "../global";
 
 const LitJsSdk = isJestRunning() ? null : require("gitcoin-lit-js-sdk");
@@ -9,6 +10,7 @@ const LitJsSdk = isJestRunning() ? null : require("gitcoin-lit-js-sdk");
 window.Buffer = Buffer;
 
 const litClient = LitJsSdk ? new LitJsSdk.LitNodeClient() : null;
+const isV2 = getConfig().allo.version === "allo-v2";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LitClient = any;
@@ -55,6 +57,31 @@ export default class Lit {
    * @returns
    */
   isRoundOperatorAccessControl() {
+    if (isV2) {
+      return [
+        {
+          conditionType: "evmContract",
+          contractAddress: this.contract,
+          functionName: "isValidAllocator",
+          functionParams: [":userAddress"],
+          functionAbi: {
+            inputs: [
+              { name: "_allocator", type: "address", internalType: "address" },
+            ],
+            name: "isValidAllocator",
+            outputs: [{ name: "", type: "bool", internalType: "bool" }],
+            stateMutability: "view",
+            type: "function",
+          },
+          chain: this.chain,
+          returnValueTest: {
+            key: "",
+            comparator: "=",
+            value: "true",
+          },
+        },
+      ];
+    }
     return [
       {
         conditionType: "evmContract",
@@ -90,7 +117,17 @@ export default class Lit {
   async encryptString(content: string) {
     const client = await getClient();
 
-    const litProvider: LitProvider = global.web3Provider as Provider;
+    if (!global.chainID) throw new Error("Chain ID is not set in global state");
+
+    const litProvider: LitProvider = new providers.JsonRpcProvider(
+      getChainById(global.chainID).rpc
+    ) as Provider;
+
+    const network: Network = {
+      name: this.chain,
+      chainId: global.chainID!,
+    };
+    litProvider.getNetwork = async () => network;
 
     litProvider.getSigner = () => global.signer;
     litProvider.listAccounts = () => [global.address as string];

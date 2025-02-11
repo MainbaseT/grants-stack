@@ -4,7 +4,7 @@ import DefaultLogoImage from "../../../assets/default_logo.png";
 import { Link } from "react-router-dom";
 import { EyeIcon } from "@heroicons/react/24/solid";
 import { TrashIcon } from "@heroicons/react/24/outline";
-import { renderToPlainText, VotingToken } from "common";
+import { renderToPlainText, TToken } from "common";
 import { Input } from "common/src/styles";
 import { useCartStorage } from "../../../store";
 
@@ -15,9 +15,10 @@ export function ProjectInCart(
     projects: CartProject[];
     roundRoutePath: string;
     last?: boolean;
-    selectedPayoutToken: VotingToken;
+    selectedPayoutToken: TToken;
     payoutTokenPrice: number;
-    removeProjectFromCart: (grantApplicationId: string) => void;
+    removeProjectFromCart: (project: CartProject) => void;
+    showMatchingEstimate: boolean;
     matchingEstimateUSD: number | undefined;
   }
 ) {
@@ -30,14 +31,14 @@ export function ProjectInCart(
 
   return (
     <div data-testid="cart-project">
-      <div className="mb-4 flex flex-col lg:flex-row justify-between sm:px-6 px-2 py-4 rounded-md">
+      <div className="mb-4 flex flex-col lg:flex-row justify-between sm:px-2 px-2 py-4 rounded-md">
         <div className="flex">
           <div className="relative overflow-hidden bg-no-repeat bg-cover  min-w-[64px] w-16 max-h-[64px] mt-auto mb-auto">
             <img
               className="inline-block rounded-full"
               src={
                 props.project.projectMetadata.logoImg
-                  ? `https://${process.env.REACT_APP_PINATA_GATEWAY}/ipfs/${props.project.projectMetadata.logoImg}`
+                  ? `${process.env.REACT_APP_IPFS_BASE_URL}/ipfs/${props.project.projectMetadata.logoImg}`
                   : DefaultLogoImage
               }
               alt={"Project Logo"}
@@ -57,11 +58,11 @@ export function ProjectInCart(
               to={`${roundRoutePath}/${project.grantApplicationId}`}
               data-testid={"cart-project-link"}
             >
-              <p className="font-semibold text-lg mb-2 text-ellipsis line-clamp-1 max-w-[250px] 2xl:max-w-none">
+              <p className="font-semibold text-lg mb-2 text-ellipsis line-clamp-1 max-w-[400px] 2xl:max-w-none">
                 {props.project.projectMetadata.title}
               </p>
             </Link>
-            <p className="text-sm text-ellipsis line-clamp-3 max-w-[250px] 2xl:max-w-none">
+            <p className="text-sm text-ellipsis line-clamp-3 max-w-[400px] 2xl:max-w-none">
               {renderToPlainText(
                 props.project.projectMetadata.description
               ).substring(0, 130)}
@@ -89,16 +90,18 @@ export function ProjectInCart(
             type="number"
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
               store.updateDonationAmount(
+                props.project.chainId,
+                props.project.roundId,
                 props.project.grantApplicationId,
                 e.target.value
               );
             }}
-            className="w-[150px] sm:w-min"
+            className="w-[100px] sm:w-[80px] text-center border border-black"
           />
-          <p className="m-auto">{props.selectedPayoutToken.name}</p>
+          <p className="m-auto">{props.selectedPayoutToken.code}</p>
           {props.payoutTokenPrice && (
-            <div className="m-auto px-2 min-w-max">
-              <span className="text-[14px] text-grey-400 ">
+            <div className="m-auto px-2 min-w-max flex flex-col">
+              <span className="text-sm text-grey-400 ">
                 ${" "}
                 {(
                   Number(
@@ -110,18 +113,23 @@ export function ProjectInCart(
                   ) * props.payoutTokenPrice
                 ).toFixed(2)}
               </span>
+              {props.showMatchingEstimate && (
+                <span className="text-teal-500 italic text-sm">
+                  ~{props.matchingEstimateUSD?.toFixed(2) || 0} USD
+                </span>
+              )}
             </div>
           )}
           <TrashIcon
             data-testid="remove-from-cart"
             onClick={() => {
-              props.removeProjectFromCart(props.project.grantApplicationId);
+              props.removeProjectFromCart(props.project);
             }}
             className="w-5 h-5 m-auto cursor-pointer mb-4"
           />
         </div>
       </div>
-      <hr className={props.last ? "" : `border-b-[2px] border-grey-100 mx-4`} />
+      {!props.last && <hr className="border-b-[2px] border-grey-100 mx-4" />}
     </div>
   );
 }

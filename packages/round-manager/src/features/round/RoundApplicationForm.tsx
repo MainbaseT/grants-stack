@@ -6,7 +6,10 @@ import {
   LockOpenIcon,
 } from "@heroicons/react/outline";
 import { PencilIcon, PlusSmIcon, XIcon } from "@heroicons/react/solid";
+import { isLitUnavailable, useAllo } from "common";
 import { Button } from "common/src/styles";
+import { RoundCategory } from "data-layer";
+import _ from "lodash";
 import { useContext, useEffect, useState } from "react";
 import {
   DeepRequired,
@@ -15,7 +18,9 @@ import {
   useForm,
 } from "react-hook-form";
 import { NavigateFunction, useLocation, useNavigate } from "react-router-dom";
+import { getAddress } from "viem";
 import { errorModalDelayMs } from "../../constants";
+import { useCreateRoundStore } from "../../stores/createRoundStore";
 import {
   ApplicationMetadata,
   EditQuestion,
@@ -23,11 +28,10 @@ import {
   ProgressStatus,
   ProjectRequirements,
   Round,
-  RoundCategory,
 } from "../api/types";
 import {
-  generateApplicationSchema,
   SchemaQuestion,
+  generateApplicationSchema,
   typeToText,
 } from "../api/utils";
 import AddQuestionModal from "../common/AddQuestionModal";
@@ -38,13 +42,11 @@ import { FormContext } from "../common/FormWizard";
 import { InputIcon } from "../common/InputIcon";
 import PreviewQuestionModal from "../common/PreviewQuestionModal";
 import ProgressModal from "../common/ProgressModal";
-import _ from "lodash";
-import { useCreateRoundStore } from "../../stores/createRoundStore";
-import { useAllo } from "common";
-import { getAddress } from "viem";
-import { useWallet } from "../common/Auth";
+import { JsonRpcSigner } from "@ethersproject/providers";
+import { useAccount } from "wagmi";
+import { getEthersSigner } from "../../app/wagmi";
 
-export const initialQuestionsQF: SchemaQuestion[] = [
+export const getInitialQuestionsQF = (chainId: number): SchemaQuestion[] => [
   {
     id: 0,
     title: "Payout Wallet Address",
@@ -59,7 +61,7 @@ export const initialQuestionsQF: SchemaQuestion[] = [
     id: 1,
     title: "Email Address",
     required: true,
-    encrypted: true,
+    encrypted: !isLitUnavailable(chainId),
     hidden: true,
     type: "email",
   },
@@ -81,12 +83,12 @@ export const initialQuestionsQF: SchemaQuestion[] = [
   },
 ];
 
-export const initialQuestionsDirect: SchemaQuestion[] = [
+export const getInitialQuestionsDirect = (chainId: number) => [
   {
     id: 1,
     title: "Email Address",
     required: true,
-    encrypted: true,
+    encrypted: !isLitUnavailable(chainId),
     hidden: true,
     type: "email",
     fixed: true,
@@ -102,25 +104,6 @@ export const initialQuestionsDirect: SchemaQuestion[] = [
   },
   {
     id: 3,
-    title: "Amount requested",
-    required: true,
-    encrypted: false,
-    hidden: true,
-    type: "number",
-    fixed: false,
-  },
-  {
-    id: 4,
-    title: "Payout token",
-    required: true,
-    encrypted: false,
-    hidden: true,
-    type: "dropdown",
-    choices: ["DAI"], // ETH is not supported.
-    fixed: false,
-  },
-  {
-    id: 5,
     title: "Payout wallet address",
     required: true,
     encrypted: false,
@@ -130,7 +113,7 @@ export const initialQuestionsDirect: SchemaQuestion[] = [
     metadataExcluded: true,
   },
   {
-    id: 6,
+    id: 4,
     title: "Milestones",
     required: true,
     encrypted: false,
@@ -138,7 +121,7 @@ export const initialQuestionsDirect: SchemaQuestion[] = [
     type: "paragraph",
   },
   {
-    id: 7,
+    id: 5,
     title: "Funding Sources",
     required: true,
     encrypted: false,
@@ -146,7 +129,7 @@ export const initialQuestionsDirect: SchemaQuestion[] = [
     type: "short-answer",
   },
   {
-    id: 8,
+    id: 6,
     title: "Team Size",
     required: true,
     encrypted: false,
@@ -181,11 +164,20 @@ export function RoundApplicationForm(props: {
   stepper: typeof FS;
   configuration?: { roundCategory?: RoundCategory };
 }) {
+  const [signer, setSigner] = useState<JsonRpcSigner>();
   const [openProgressModal, setOpenProgressModal] = useState(false);
   const [openPreviewModal, setOpenPreviewModal] = useState(false);
   const [openAddQuestionModal, setOpenAddQuestionModal] = useState(false);
   const [toEdit, setToEdit] = useState<EditQuestion | undefined>();
-  const { signer: walletSigner } = useWallet();
+  const { chainId, isConnected, connector } = useAccount();
+
+  useEffect(() => {
+    const init = async () => {
+      const s = await getEthersSigner(connector!, chainId!);
+      setSigner(s);
+    };
+    if (isConnected && chainId && connector?.getAccounts) init();
+  }, [chainId, isConnected, connector]);
 
   const { currentStep, setCurrentStep, stepsCount, formData } =
     useContext(FormContext);
@@ -206,8 +198,8 @@ export function RoundApplicationForm(props: {
   const defaultQuestions: ApplicationMetadata["questions"] = questionsArg
     ? questionsArg
     : roundCategory === RoundCategory.QuadraticFunding
-    ? initialQuestionsQF
-    : initialQuestionsDirect;
+    ? getInitialQuestionsQF(chainId!)
+    : getInitialQuestionsDirect(chainId!);
 
   const { control, handleSubmit } = useForm<Round>({
     defaultValues: {
@@ -327,7 +319,7 @@ export function RoundApplicationForm(props: {
           roundOperators: round.operatorWallets.map(getAddress),
         },
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        walletSigner: walletSigner!,
+        walletSigner: signer!,
       });
     } catch (error) {
       datadogLogs.logger.error(
@@ -350,7 +342,7 @@ export function RoundApplicationForm(props: {
     },
     {
       name: "Indexing",
-      description: "The subgraph is indexing the data.",
+      description: "The data is being indexed.",
       status: indexingStatus,
     },
     {

@@ -2,8 +2,10 @@ import {
   RoundApplicationAnswers,
   RoundApplicationMetadata,
 } from "data-layer/dist/roundApplication.types";
+import { isLitUnavailable } from "common";
 import Lit from "../services/lit";
 import { Project, RoundApplication } from "../types";
+import { global } from "../global";
 
 export default class RoundApplicationBuilder {
   enableEncryption: boolean;
@@ -14,31 +16,34 @@ export default class RoundApplicationBuilder {
 
   private roundAddress: string;
 
-  private chainName: string;
-
-  private lit: Lit;
+  private lit?: Lit;
 
   constructor(
     enableEncryption: boolean,
     project: Project,
     ram: RoundApplicationMetadata,
     roundAddress: string,
-    chainName: string
+    chainName?: string
   ) {
     this.enableEncryption = enableEncryption;
     this.project = project;
     this.ram = ram;
     this.roundAddress = roundAddress;
-    this.chainName = chainName;
-    const litInit = {
-      chain: chainName,
-      contract: this.roundAddress,
-    };
 
-    this.lit = new Lit(litInit);
+    if (chainName) {
+      const litInit = {
+        chain: chainName,
+        contract: this.roundAddress,
+      };
+      this.lit = new Lit(litInit);
+    }
   }
 
   async encryptAnswer(answer: string) {
+    if (!this.lit) {
+      throw new Error("lit not initialized");
+    }
+
     if (!this.enableEncryption) {
       return {
         ciphertext: answer,
@@ -95,7 +100,7 @@ export default class RoundApplicationBuilder {
           let answer;
           // eslint-disable-next-line
           let encryptedAnswer;
-          if (question.encrypted) {
+          if (question.encrypted && !isLitUnavailable(global.chainID!)) {
             // eslint-disable-next-line
             encryptedAnswer = await this.encryptAnswer(
               (formInputs[question.id] as string) ?? ""

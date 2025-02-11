@@ -71,6 +71,7 @@ const colorMap = {
   grey: "bg-grey-100",
   yellow: "bg-yellow-100",
   orange: "bg-orange-100",
+  rainbow: "bg-rainbow-gradient",
 } as const;
 
 const roundedMap = {
@@ -94,7 +95,6 @@ export const Badge = tw.div<{
   max-w-full
   w-fit
   items-center
-  justify-center
   px-2
   py-1.5
   ${(p) => colorMap[p.color ?? "grey"]}
@@ -113,8 +113,9 @@ gap-4
 
 export const Tab = ({
   active,
+  show,
   ...linkProps
-}: React.ComponentProps<typeof Link> & { active: boolean }) => {
+}: React.ComponentProps<typeof Link> & { show: boolean; active: boolean }) => {
   return (
     <Link
       className={`
@@ -124,6 +125,7 @@ export const Tab = ({
   border-blue-100
   rounded-t-2xl
   -mb-1
+  ${show ? "" : "hidden"}
   ${active ? `font-bold bg-blue-100 border-orange-100` : ""}
   `}
       {...linkProps}

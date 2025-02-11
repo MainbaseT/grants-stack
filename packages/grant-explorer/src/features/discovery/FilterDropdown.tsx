@@ -35,15 +35,20 @@ export const FILTER_OPTIONS: RoundFilterUiOption[] = [
       },
       {
         label: "Direct grants",
-        value: isAlloV2 ? "allov2.DirectGrantsSimpleStrategy" : ROUND_PAYOUT_DIRECT,
+        value: isAlloV2
+          ? "allov2.DirectGrantsSimpleStrategy"
+          : ROUND_PAYOUT_DIRECT,
       },
     ],
   },
-
   {
     label: "Status",
     value: "status",
     children: [
+      {
+        label: "Verified",
+        value: "verified",
+      },
       {
         label: "Active",
         value: RoundStatus.active,
@@ -61,8 +66,8 @@ export const FILTER_OPTIONS: RoundFilterUiOption[] = [
   {
     label: "Network",
     value: "network",
-    children: getEnabledChains().map(({ id, name }) => ({
-      label: `Rounds on ${name}`,
+    children: getEnabledChains().map(({ id, prettyName }) => ({
+      label: `Rounds on ${prettyName}`,
       value: String(id),
     })),
   },
@@ -73,7 +78,6 @@ export function FilterDropdown() {
 
   const filter = getRoundSelectionParamsFromUrlParams(params);
   const { status = "", type = "", network = "" } = filter;
-
   const selected = getFilterLabel({ status, type, network });
   return (
     <Dropdown
@@ -131,7 +135,7 @@ export function FilterDropdown() {
               >
                 <Disclosure.Panel
                   static
-                  className=" mt-1 w-full overflow-auto p-2"
+                  className="mt-1 w-full overflow-auto p-2"
                 >
                   {children
                     ?.filter((child) => !child.hide)

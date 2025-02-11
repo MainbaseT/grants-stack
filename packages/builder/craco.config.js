@@ -1,6 +1,11 @@
 const path = require("path");
 const CracoEsbuildPlugin = require("craco-esbuild");
 const { VerifyEnvPlugin } = require("verify-env");
+const { config } = require("dotenv");
+
+config({
+  path: path.join(__dirname, "../../.env"),
+});
 
 const esmModules = [
   "@rainbow-me",
@@ -11,27 +16,6 @@ const esmModules = [
 ];
 
 module.exports = {
-  jest: {
-    configure: () => ({
-      preset: "ts-jest/presets/js-with-ts",
-      testEnvironment: "jsdom",
-      clearMocks: true,
-      resetMocks: true,
-      coverageProvider: "v8",
-      verbose: true,
-      // @rainbow-me/rainbowkit is already an ESM module and
-      // it trips Jest when it tries to transform it, this ignores it
-      transformIgnorePatterns: [
-        `/node_modules/.pnpm/(?!(${esmModules.join("|")}))`,
-      ],
-      moduleNameMapper: {
-        "\\.(css|styl|less|sass|scss|png|jpg|svg|ttf|woff|woff2)$":
-          require.resolve("jest-transform-stub"),
-      },
-      setupFilesAfterEnv: ["./src/setupTests.ts"],
-      testPathIgnorePatterns: ["/e2e/"],
-    }),
-  },
   webpack: {
     plugins: {
       add: [new VerifyEnvPlugin()],

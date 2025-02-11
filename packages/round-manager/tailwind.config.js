@@ -1,7 +1,12 @@
+const defaultTheme = require("tailwindcss/defaultTheme");
+
 module.exports = {
   content: ["./src/**/*.{js,jsx,ts,tsx}", "../common/src/**/*.{js,jsx,ts,tsx}"],
   theme: {
     extend: {
+      fontFamily: {
+        mono: ['"DM Mono"', ...defaultTheme.fontFamily.mono],
+      },
       animation: {
         "pulse-scale": "pulse-scale 2s ease-in-out infinite",
       },
@@ -12,6 +17,19 @@ module.exports = {
         transparent: "transparent",
         black: "#000",
         white: "#FFF",
+        green: {
+          100: "#ADEDE5",
+          200: "#47A095",
+        },
+        blue: {
+          100: "#D3EDFE",
+        },
+        nectary: {
+          600: "#FF7043",
+        },
+        orange: {
+          100: "#FFD9CD",
+        },
         grey: {
           50: "#F3F3F5",
           100: "#E2E0E7",
@@ -28,6 +46,7 @@ module.exports = {
           200: "#C4C1CF",
           250: "#BEBEBE",
           300: "#A7A2B6",
+          350: "#979998",
           400: "#757087",
           500: "#0E0333",
         },
@@ -53,7 +72,7 @@ module.exports = {
           500: "#D03E63",
         },
         yellow: {
-          100: "#FFF8DB",
+          100: "#FFEFBE",
           200: "#FFEEA8",
           300: "#FFDB4C",
           400: "#FFCC00",

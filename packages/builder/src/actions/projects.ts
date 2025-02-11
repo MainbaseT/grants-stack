@@ -1,16 +1,12 @@
+import { getChains } from "common";
 import { datadogRum } from "@datadog/browser-rum";
-import { Client as AlloClient } from "allo-indexer-client";
-import { ChainId } from "common";
 import { getConfig } from "common/src/config";
 import {
   ApplicationStatus,
   DataLayer,
   ProjectApplicationWithRound,
 } from "data-layer";
-import { utils } from "ethers";
 import { Dispatch } from "redux";
-import { RoundCategory } from "common/dist/types";
-import { global } from "../global";
 import { RootState } from "../reducers";
 import { ProjectStats } from "../reducers/projects";
 import { transformAndDispatchProject } from "./grantsMetadata";
@@ -28,7 +24,7 @@ export const PROJECTS_LOADED = "PROJECTS_LOADED";
 interface ProjectsLoadedAction {
   type: typeof PROJECTS_LOADED;
   payload: {
-    chainIDs: ChainId[];
+    chainIDs: number[];
   };
 }
 
@@ -130,14 +126,12 @@ export type ProjectsActions =
   | ProjectAnchorsLoadedAction;
 
 /** Action Creators */
-export const projectsLoading = (
-  chainIDs: ChainId[]
-): ProjectsLoadingAction => ({
+export const projectsLoading = (chainIDs: number[]): ProjectsLoadingAction => ({
   type: PROJECTS_LOADING,
   payload: chainIDs,
 });
 
-export const projectsLoaded = (chainIDs: ChainId[]): ProjectsLoadedAction => ({
+export const projectsLoaded = (chainIDs: number[]): ProjectsLoadedAction => ({
   type: PROJECTS_LOADED,
   payload: {
     chainIDs,
@@ -179,7 +173,7 @@ export const projectAnchorsLoaded = (projectID: string, anchor: string) => ({
  * @returns All projects for a given chain
  */
 export const loadProjects =
-  (chainIDs: ChainId[], dataLayer: DataLayer, withMetaData?: boolean) =>
+  (chainIDs: number[], dataLayer: DataLayer, withMetaData?: boolean) =>
   async (dispatch: Dispatch, getState: () => RootState) => {
     try {
       const state = getState();
@@ -193,7 +187,9 @@ export const loadProjects =
 
       if (projects && withMetaData) {
         projects.forEach((project) => {
-          dispatch<any>(transformAndDispatchProject(project.id, project));
+          if (project.metadata && project.metadata.title) {
+            dispatch<any>(transformAndDispatchProject(project.id, project));
+          }
         });
       }
 
@@ -239,8 +235,7 @@ export const loadProjects =
 export const loadAllChainsProjects =
   (dataLayer: DataLayer, withMetaData?: boolean) =>
   async (dispatch: Dispatch) => {
-    const { web3Provider } = global;
-    const chainIds = web3Provider?.chains?.map((chain) => chain.id as ChainId);
+    const chainIds = getChains().map((chain) => chain.id as number);
     if (chainIds) {
       dispatch(projectsLoading(chainIds));
       dispatch<any>(loadProjects(chainIds, dataLayer, withMetaData));
@@ -268,23 +263,52 @@ export const fetchProjectApplications =
     });
 
     try {
-      const { web3Provider } = global;
-      if (!web3Provider?.chains) {
-        return;
+      const chainIds = getChains().map((chain) => chain.id);
+
+      const legacyProjectId = await dataLayer.getLegacyProjectId({
+        projectId,
+      });
+
+      const projectIds = [projectId];
+      if (legacyProjectId) {
+        projectIds.push(legacyProjectId);
       }
 
-      const id = projectId;
-
-      const chainIds = web3Provider.chains.map((chain) => chain.id);
-      const applications = await dataLayer.getApplicationsByProjectId({
-        projectId: id,
+      const applications = await dataLayer.getApplicationsByProjectIds({
+        projectIds,
         chainIds,
       });
+
+      const stats: ProjectStats[] = [];
+
+      // for each application, get the round data
+      for (const application of applications) {
+        const singleStats: ProjectStats = {
+          roundId: application.roundId,
+          fundingReceived: application.totalAmountDonatedInUsd,
+          uniqueContributors: application.uniqueDonorsCount,
+          avgContribution:
+            application.uniqueDonorsCount === 0
+              ? 0
+              : application.totalAmountDonatedInUsd /
+                application.uniqueDonorsCount,
+          totalContributions: application.totalDonationsCount,
+          success: true,
+        };
+
+        stats.push(singleStats);
+      }
 
       dispatch({
         type: PROJECT_APPLICATIONS_LOADED,
         projectID: projectId,
         applications,
+      });
+
+      dispatch({
+        type: PROJECT_STATS_LOADED,
+        projectID: projectId,
+        stats,
       });
     } catch (error: any) {
       console.error(
@@ -295,102 +319,6 @@ export const fetchProjectApplications =
       );
       datadogRum.addError(error, { projectId });
     }
-  };
-
-/**
- * Load project stats for a given project and network
- *
- * @param projectID
- * @param projectRegistryAddress
- * @param projectChainId
- * @param rounds
- *
- * @returns
- */
-export const loadProjectStats =
-  (
-    projectID: string,
-    projectRegistryAddress: string,
-    projectChainId: string,
-    rounds: Array<{
-      roundId: string;
-      chainId: ChainId;
-      roundType: RoundCategory;
-    }>
-  ) =>
-  async (dispatch: Dispatch) => {
-    dispatch({
-      type: PROJECT_STATS_LOADING,
-      projectID,
-    });
-    const boundFetch = fetch.bind(window);
-    const stats: ProjectStats[] = [];
-
-    const updateStats = async (projectRoundData: any, roundId: string) => {
-      const singleStats: ProjectStats = {
-        roundId,
-        ...projectRoundData,
-      };
-
-      stats.push(singleStats);
-    };
-
-    const loadingErrorUpdate = async (roundId: string) => {
-      await updateStats(
-        {
-          fundingReceived: -1,
-          uniqueContributors: -1,
-          avgContribution: -1,
-          totalContributions: -1,
-          success: false,
-        },
-        roundId
-      );
-    };
-
-    for await (const round of rounds) {
-      // NOTE: Consider finding a way for singleton Client to be used
-      const client = new AlloClient(
-        boundFetch,
-        process.env.REACT_APP_INDEXER_V2_API_URL ?? "",
-        round.chainId
-      );
-
-      const applications = await client.getRoundApplications(
-        utils.getAddress(round.roundId.toLowerCase())
-      );
-
-      const project = applications.find(
-        (app) =>
-          app.projectId === projectID &&
-          app.status === "APPROVED" &&
-          round.roundType === RoundCategory.QuadraticFunding
-      );
-
-      if (project) {
-        await updateStats(
-          {
-            fundingReceived: project.amountUSD,
-            uniqueContributors: project.uniqueContributors,
-            avgContribution:
-              project.uniqueContributors === 0
-                ? 0
-                : project.amountUSD / project.uniqueContributors,
-            totalContributions: project.votes,
-            success: true,
-          },
-          round.roundId
-        );
-      } else {
-        await loadingErrorUpdate(round.roundId);
-      }
-    }
-
-    dispatch({
-      type: PROJECT_STATS_LOADED,
-      projectID,
-      stats,
-    });
   };
 
 export const unloadProjects = () => projectsUnload();

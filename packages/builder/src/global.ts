@@ -1,10 +1,9 @@
-import { Provider } from "@wagmi/core";
-import { ChainId } from "common";
+import { FallbackProvider, JsonRpcProvider } from "@ethersproject/providers";
 
 export interface Global {
-  web3Provider: Provider | undefined;
+  web3Provider: JsonRpcProvider | FallbackProvider | undefined;
   signer: any | undefined;
-  chainID: ChainId | undefined;
+  chainID: number | undefined;
   address: string | undefined;
 }
 

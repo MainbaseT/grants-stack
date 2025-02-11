@@ -1,12 +1,22 @@
 import { Signer } from "@ethersproject/abstract-signer";
-import { ApplicationStatus, Round } from "data-layer";
-import { Address, Hex, PublicClient } from "viem";
-import { AnyJson, ChainId } from "..";
-import { CreateRoundData, RoundCategory, VotingToken } from "../types";
+import {
+  ApplicationStatus,
+  DistributionMatch,
+  Round,
+  RoundCategory,
+} from "data-layer";
+import { Address, Hex } from "viem";
+import { AnyJson } from "..";
+import {
+  CreateRoundData,
+  UpdateRoundParams,
+  MatchingStatsData,
+} from "../types";
 import { Result } from "./common";
 import { AlloOperation } from "./operation";
 import { TransactionReceipt } from "./transaction-sender";
 import { PermitSignature } from "./voting";
+import { TToken } from "@gitcoin/gitcoin-chain-data";
 
 export type CreateRoundArguments = {
   roundData: {
@@ -42,6 +52,7 @@ export interface Allo {
       ipfs: Result<string>;
       transaction: Result<Hex>;
       transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<void>;
     }
   >;
 
@@ -67,6 +78,7 @@ export interface Allo {
       ipfs: Result<string>;
       transaction: Result<Hex>;
       transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<void>;
     }
   >;
 
@@ -92,22 +104,22 @@ export interface Allo {
     projectId: Hex;
     roundId: Hex | number;
     metadata: AnyJson;
-    strategy?: RoundCategory;
+    strategy: RoundCategory;
   }) => AlloOperation<
     Result<Hex>,
     {
       ipfs: Result<string>;
       transaction: Result<Hex>;
       transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
     }
   >;
 
-  voteUsingMRCContract: (
-    publicClient: PublicClient,
-    chainId: ChainId,
-    token: VotingToken,
+  donate: (
+    chainId: number,
+    token: TToken,
     groupedVotes: Record<string, Hex[]>,
-    groupedAmounts: Record<string, bigint>,
+    groupedAmounts: Record<string, bigint> | bigint[],
     nativeTokenAmount: bigint,
     permit?: {
       sig: PermitSignature;
@@ -127,12 +139,143 @@ export interface Allo {
       index: number;
       status: ApplicationStatus;
     }[];
+    strategy?: RoundCategory;
   }) => AlloOperation<
     Result<void>,
     {
       transaction: Result<Hex>;
       transactionStatus: Result<TransactionReceipt>;
       indexingStatus: Result<void>;
+    }
+  >;
+
+  fundRound: (args: {
+    tokenAddress: Address;
+    roundId: string;
+    amount: bigint;
+    requireTokenApproval?: boolean;
+  }) => AlloOperation<
+    Result<null>,
+    {
+      tokenApprovalStatus: Result<TransactionReceipt | null>;
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
+    }
+  >;
+
+  withdrawFundsFromStrategy: (args: {
+    payoutStrategyAddress: Address;
+    tokenAddress: Address;
+    recipientAddress: Address;
+  }) => AlloOperation<
+    Result<null>,
+    {
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
+    }
+  >;
+
+  finalizeRound: (args: {
+    roundId: string;
+    strategyAddress: Address;
+    matchingDistribution: DistributionMatch[];
+  }) => AlloOperation<
+    Result<null>,
+    {
+      ipfs: Result<string>;
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
+    }
+  >;
+
+  editRound: (args: {
+    roundId: Hex | number;
+    roundAddress?: Hex;
+    data: UpdateRoundParams;
+    strategy?: RoundCategory;
+  }) => AlloOperation<
+    Result<Hex | number>,
+    {
+      ipfs: Result<string>;
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<void>;
+    }
+  >;
+
+  batchDistributeFunds: (args: {
+    payoutStrategyOrPoolId: string;
+    allProjects: MatchingStatsData[];
+    projectIdsToBePaid: string[];
+  }) => AlloOperation<
+    Result<null>,
+    {
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
+    }
+  >;
+
+  payoutDirectGrants: (args: {
+    roundId: Hex | number;
+    token: Hex;
+    amount: bigint;
+    recipientAddress: Hex;
+    recipientId: Hex;
+    vault?: Hex;
+    applicationIndex?: number;
+  }) => AlloOperation<
+    Result<{ blockNumber: bigint }>,
+    {
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<void>;
+    }
+  >;
+
+  managePoolManager: (args: {
+    poolId: string;
+    manager: Address;
+    addOrRemove: "add" | "remove";
+  }) => AlloOperation<
+    Result<null>,
+    {
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
+    }
+  >;
+
+  manageProfileMembers: (args: {
+    profileId: Hex;
+    members: Address[];
+    addOrRemove: "add" | "remove";
+  }) => AlloOperation<
+    Result<null>,
+    {
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
+    }
+  >;
+
+  directAllocation: (args: {
+    tokenAddress: Address;
+    poolId: string;
+    amount: bigint;
+    recipient: Address;
+    nonce: bigint;
+    requireTokenApproval?: boolean;
+  }) => AlloOperation<
+    Result<null>,
+    {
+      tokenApprovalStatus: Result<TransactionReceipt | null>;
+      transaction: Result<Hex>;
+      transactionStatus: Result<TransactionReceipt>;
+      indexingStatus: Result<null>;
     }
   >;
 }

@@ -1,8 +1,7 @@
 import "@testing-library/jest-dom";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { RoundApplicationMetadata, DataLayer } from "data-layer";
+import { DataLayer, RoundApplicationMetadata, RoundCategory } from "data-layer";
 import { Store } from "redux";
-import { RoundCategory } from "common/dist/types";
 import { web3ChainIDLoaded } from "../../../actions/web3";
 import Form from "../../../components/application/Form";
 import setupStore from "../../../store";
@@ -106,6 +105,7 @@ const round: Round = {
   },
   payoutStrategy: RoundCategory.QuadraticFunding,
   programName: "sample program",
+  tags: [],
 };
 
 jest.mock("wagmi", () => ({
@@ -301,7 +301,7 @@ describe("<Form />", () => {
         expect(
           screen.getByText(
             // eslint-disable-next-line max-len
-            "It looks like the payout wallet address you have provided may not be a valid multi-sig on the undefined network. Please update your payout wallet address before proceeding."
+            "It looks like the payout wallet address you have provided may not be a valid multi-sig on the Ethereum network. Please update your payout wallet address before proceeding."
           )
         ).toBeInTheDocument()
       );

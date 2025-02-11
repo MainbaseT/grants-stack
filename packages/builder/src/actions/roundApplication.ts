@@ -2,16 +2,15 @@ import { datadogLogs } from "@datadog/browser-logs";
 import { datadogRum } from "@datadog/browser-rum";
 import { Allo, AnyJson, isJestRunning } from "common";
 import { getConfig } from "common/src/config";
-import { DataLayer } from "data-layer";
+import { DataLayer, RoundCategory } from "data-layer";
 import { RoundApplicationAnswers } from "data-layer/dist/roundApplication.types";
 import { ethers } from "ethers";
 import { Dispatch } from "redux";
 import { Hex } from "viem";
-import { RoundCategory } from "common/dist/types";
+import PinataClient from "common/src/services/pinata";
 import { global } from "../global";
 import { RootState } from "../reducers";
 import { Status } from "../reducers/roundApplication";
-import PinataClient from "../services/pinata";
 import { Project, RoundApplication, SignedRoundApplication } from "../types";
 import RoundApplicationBuilder from "../utils/RoundApplicationBuilder";
 import { objectToDeterministicJSON } from "../utils/deterministicJSON";
@@ -135,7 +134,7 @@ const dispatchAndLogApplicationError = (
   dispatch(applicationError(roundAddress, error, step));
 };
 
-export function chainIdToChainName(chainId: number): string {
+export function chainIdToChainName(chainId: number): string | undefined {
   // eslint-disable-next-line no-restricted-syntax
   for (const name in LitJsSdk.LIT_CHAINS) {
     if (LitJsSdk.LIT_CHAINS[name].chainId === chainId) {
@@ -143,7 +142,7 @@ export function chainIdToChainName(chainId: number): string {
     }
   }
 
-  throw new Error(`couldn't find LIT chain name for chainId ${chainId}`);
+  return undefined;
 }
 
 const applyToRound =
@@ -161,7 +160,7 @@ const applyToRound =
       projectId: projectUniqueID as `0x${string}`,
       roundId: isV2 ? Number(roundId) : (roundId as Hex),
       metadata: signedApplication as unknown as AnyJson,
-      strategy,
+      strategy: strategy as RoundCategory,
     });
 
     // Apply To Round
@@ -198,9 +197,10 @@ const applyToRound =
       .on("transactionStatus", async (res) => {
         if (res.type === "success") {
           dispatch({
-            type: ROUND_APPLICATION_LOADED,
+            type: ROUND_APPLICATION_LOADING,
             roundAddress: roundId,
             projectId: projectID,
+            status: Status.Indexing,
           });
         } else {
           dispatchAndLogApplicationError(
@@ -212,6 +212,17 @@ const applyToRound =
           console.log("Transaction Status Error", res.error);
         }
       })
+      .on("indexingStatus", (res) => {
+        if (res.type === "success") {
+          dispatch({
+            type: ROUND_APPLICATION_LOADED,
+            roundAddress: roundId,
+            projectId: projectID,
+          });
+        } else {
+          console.error("Indexing Status Error", res.error);
+        }
+      })
       .execute();
   };
 
@@ -220,7 +231,8 @@ export const submitApplication =
     roundId: string,
     formInputs: RoundApplicationAnswers,
     allo: Allo,
-    createLinkedProject: boolean
+    createLinkedProject: boolean,
+    dataLayer: DataLayer
   ) =>
   async (dispatch: Dispatch, getState: () => RootState) => {
     const state = getState();
@@ -318,6 +330,7 @@ export const submitApplication =
 
       deterministicApplication = objectToDeterministicJSON(application as any);
     } catch (error) {
+      console.error("error building round application", error);
       dispatchAndLogApplicationError(
         dispatch,
         roundId,
@@ -365,10 +378,6 @@ export const submitApplication =
 
     const isV2 = getConfig().allo.version === "allo-v2";
 
-    const projectUniqueID = isV2
-      ? (state.projects.anchor![projectID] as Hex)
-      : projectID;
-
     if (createLinkedProject) {
       // Create Linked Project
       const result = allo.createProject({
@@ -414,12 +423,30 @@ export const submitApplication =
             );
           }
         })
-        .on("transactionStatus", async (res) => {
+        .on("indexingStatus", async (res) => {
           if (res.type === "success") {
             console.log(
               "profile creation: Transaction Status Success",
               res.value
             );
+
+            const projectUniqueID = isV2
+              ? await dataLayer.getProjectAnchorByIdAndChainId({
+                  projectId: projectID,
+                  chainId: Number(chainID),
+                })
+              : projectID;
+
+            if (!projectUniqueID) {
+              dispatchAndLogApplicationError(
+                dispatch,
+                roundId,
+                "error no projectUniqueID",
+                Status.SigningApplication
+              );
+              return;
+            }
+
             dispatch<any>(
               applyToRound(
                 roundId,
@@ -440,6 +467,23 @@ export const submitApplication =
         })
         .execute();
     } else {
+      const projectUniqueID = isV2
+        ? await dataLayer.getProjectAnchorByIdAndChainId({
+            projectId: projectID,
+            chainId: Number(chainID),
+          })
+        : projectID;
+
+      if (!projectUniqueID) {
+        dispatchAndLogApplicationError(
+          dispatch,
+          roundId,
+          "error no projectUniqueID",
+          Status.SigningApplication
+        );
+        return;
+      }
+
       dispatch<any>(
         applyToRound(
           roundId,

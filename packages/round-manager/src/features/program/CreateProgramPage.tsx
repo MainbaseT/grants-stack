@@ -7,7 +7,6 @@ import {
   XIcon,
 } from "@heroicons/react/solid";
 
-import { useWallet } from "../common/Auth";
 import { Button, Input } from "common/src/styles";
 import Navbar from "../common/Navbar";
 import Footer from "common/src/components/Footer";
@@ -17,9 +16,8 @@ import ErrorModal from "../common/ErrorModal";
 import { ProgressStatus, ProgressStep } from "../api/types";
 import { CreateProgramState, useCreateProgram } from "./useCreateProgram";
 import ReactTooltip from "react-tooltip";
-import { CHAINS } from "../api/utils";
-import { ChainId } from "common/src/chain-ids";
-import { AlloError } from "common";
+import { AlloError, getChainById, stringToBlobUrl } from "common";
+import { useAccount } from "wagmi";
 
 type FormData = {
   name: string;
@@ -57,7 +55,7 @@ export default function CreateProgram() {
   const [openProgressModal, setOpenProgressModal] = useState(false);
   const [openErrorModal, setOpenErrorModal] = useState(false);
 
-  const { address, chain } = useWallet();
+  const { address, chain } = useAccount();
 
   const { createProgram, state: createProgramState } = useCreateProgram();
 
@@ -189,7 +187,7 @@ export default function CreateProgram() {
   return (
     <div className="bg-[#F3F3F5]">
       <Navbar />
-      <div className="container mx-auto h-screen px-4 pt-8">
+      <div className="container mx-auto h-max px-4 pt-8">
         <header>
           <div className="flow-root">
             <h1 className="float-left text-[32px] mb-7">
@@ -253,14 +251,14 @@ export default function CreateProgram() {
                     </label>
 
                     <div className="opacity-50 flex mt-1 py-[6px] shadow-sm px-3 border rounded-md border-grey-100">
-                      {CHAINS[chain.id as ChainId] ? (
+                      {getChainById(chain!.id) ? (
                         <>
                           <img
-                            src={CHAINS[chain.id as ChainId]?.logo}
+                            src={stringToBlobUrl(getChainById(chain!.id).icon)}
                             alt="program-chain-logo"
                             className="h-4 w-4 ml-1 mr-2 mt-1"
                           />
-                          <p>{chain.name}</p>
+                          <p>{chain!.name}</p>
                         </>
                       ) : (
                         <>

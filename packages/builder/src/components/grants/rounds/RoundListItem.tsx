@@ -1,9 +1,12 @@
 // eslint-disable max-len
 import { Badge, Box, Spinner } from "@chakra-ui/react";
-import { ApplicationStatus, ProjectApplicationWithRound } from "data-layer";
+import {
+  ApplicationStatus,
+  ProjectApplicationWithRound,
+  RoundCategory,
+} from "data-layer";
 import { useEffect, useState } from "react";
 import { useSelector } from "react-redux";
-import { RoundCategory } from "common/dist/types";
 import { RootState } from "../../../reducers";
 import { roundApplicationPathForProject } from "../../../routes";
 import { Round, RoundDisplayType } from "../../../types";
@@ -92,6 +95,11 @@ export default function RoundListItem({
           {roundPayoutStrategy === RoundCategory.Direct ? (
             <span className={`text-${colorScheme?.text} text-sm`}>
               Direct Grant
+            </span>
+          ) : null}
+          {roundPayoutStrategy === RoundCategory.Retrofunding ? (
+            <span className={`text-${colorScheme?.text} text-sm`}>
+              Retrofunding
             </span>
           ) : null}
         </Badge>

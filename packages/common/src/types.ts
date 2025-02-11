@@ -1,6 +1,6 @@
 import { Round } from "data-layer";
-import { ChainId } from "./chain-ids";
-import { Hex } from "viem";
+import { AnyJson } from ".";
+import { BigNumber } from "ethers";
 
 export type CreateRoundData = {
   roundMetadataWithProgramContractAddress: Round["roundMetadata"];
@@ -14,6 +14,32 @@ export type CreateRoundData = {
   };
   round: Round;
   roundCategory: RoundCategory;
+};
+
+export type UpdateRoundParams = {
+  applicationMetadata?: AnyJson;
+  roundMetadata?: AnyJson;
+  matchAmount?: BigNumber;
+  roundStartTime?: Date;
+  roundEndTime?: Date;
+  applicationsStartTime?: Date;
+  applicationsEndTime?: Date;
+};
+
+export type MatchingStatsData = {
+  index?: number;
+  projectName: string;
+  uniqueContributorsCount?: number;
+  contributionsCount: number;
+  matchPoolPercentage: number;
+  projectId: string;
+  applicationId: string;
+  anchorAddress?: string;
+  matchAmountInToken: BigNumber;
+  originalMatchAmountInToken: BigNumber;
+  projectPayoutAddress: string;
+  status?: string;
+  hash?: string;
 };
 
 export type SchemaQuestion = {
@@ -42,6 +68,16 @@ export type ProjectRequirements = {
 export enum RoundCategory {
   QuadraticFunding,
   Direct,
+  Retrofunding,
+}
+
+export enum UpdateAction {
+  UPDATE_APPLICATION_META_PTR = "updateApplicationMetaPtr",
+  UPDATE_ROUND_META_PTR = "updateRoundMetaPtr",
+  UPDATE_ROUND_START_AND_END_TIMES = "updateStartAndEndTimes",
+  UPDATE_MATCH_AMOUNT = "updateMatchAmount",
+  UPDATE_ROUND_FEE_ADDRESS = "updateRoundFeeAddress",
+  UPDATE_ROUND_FEE_PERCENTAGE = "updateRoundFeePercentage",
 }
 
 export type InputType =
@@ -60,18 +96,9 @@ export type DeepRequired<T> = {
   [K in keyof T]: Required<DeepRequired<T[K]>>;
 };
 
-export type VotingToken = {
-  name: string;
-  chainId: ChainId;
-  address: Hex;
-  decimal: number;
-  logo?: string;
-  default?: boolean;
-  redstoneTokenId: string;
-  permitVersion?: string;
-  //TODO: remove if the previous default was intended to be used as defaultForVoting
-  defaultForVoting: boolean;
-  //TODO: split PayoutTokens and VotingTokens in
-  // 2 different types/lists and remove the following attribute
-  canVote: boolean;
+export type Allocation = {
+  profileOwner: `0x${string}`;
+  amount: bigint;
+  token: `0x${string}`;
+  nonce: bigint;
 };

@@ -5,7 +5,13 @@ import {
   SelectorIcon,
 } from "@heroicons/react/solid";
 import { yupResolver } from "@hookform/resolvers/yup";
-import { classNames } from "common";
+import {
+  NATIVE,
+  TToken,
+  classNames,
+  getPayoutTokens,
+  stringToBlobUrl,
+} from "common";
 import { Input } from "common/src/styles";
 import _ from "lodash";
 import { Fragment, useContext, useState } from "react";
@@ -21,10 +27,9 @@ import {
 import ReactTooltip from "react-tooltip";
 import * as yup from "yup";
 import { Round } from "../api/types";
-import { useWallet } from "../common/Auth";
 import { FormStepper } from "../common/FormStepper";
 import { FormContext } from "../common/FormWizard";
-import { getPayoutTokenOptions, PayoutToken } from "../api/payoutTokens";
+import { useAccount } from "wagmi";
 interface QuadraticFundingFormProps {
   stepper: typeof FormStepper;
 }
@@ -69,7 +74,7 @@ export const FundingValidationSchema = yup.object().shape({
             .moreThan(0, "Minimum donation threshold must be more than zero."),
         }),
       sybilDefense: yup
-        .boolean()
+        .string()
         .required("You must select if you want to use sybil defense."),
     }),
   }),
@@ -91,19 +96,22 @@ export default function QuadraticFundingForm(props: QuadraticFundingFormProps) {
       matchingFundsAvailable: 0,
       matchingCap: false,
       minDonationThreshold: false,
-      sybilDefense: true,
+      sybilDefense: "passport-mbds",
     };
 
-  const { chain } = useWallet();
-  const payoutTokenOptions: PayoutToken[] = [
+  const { chainId } = useAccount();
+  const payoutTokenOptions: TToken[] = [
     {
-      name: "Choose Payout Token",
-      chainId: chain.id,
+      code: "Choose Payout Token",
       address: "0x0",
       default: true,
-      decimal: 0,
+      decimals: 0,
+      canVote: false,
+      redstoneTokenId: "",
     },
-    ...getPayoutTokenOptions(chain.id),
+    ...getPayoutTokens(chainId as number).filter(
+      (token) => token.address.toLowerCase() !== NATIVE.toLowerCase()
+    ),
   ];
 
   const {
@@ -218,31 +226,10 @@ export default function QuadraticFundingForm(props: QuadraticFundingFormProps) {
                     </span>
                   </p>
                 </div>
-                <ReactTooltip
-                  id="matching-cap-tooltip"
-                  place="bottom"
-                  type="dark"
-                  effect="solid"
-                >
-                  <p className="text-xs">
-                    This will cap the percentage <br />
-                    of your overall matching pool <br />
-                    that a single grantee can receive.
-                  </p>
-                </ReactTooltip>
               </div>
               <p className="text-grey-400 mb-2 mt-1 text-sm">
-                Ensure that project supporters are not bots or sybil with
-                Gitcoin Passport. Learn more about Gitcoin Passport{" "}
-                <a
-                  href="https://docs.passport.gitcoin.co/overview/readme"
-                  className="text-violet-300"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  here
-                </a>
-                .
+                Select the level of security you prefer to safeguard your round
+                against potential Sybil attacks.
               </p>
               <div className="flex">
                 <SybilDefense
@@ -288,7 +275,7 @@ function LeftSidebar() {
 
 function PayoutTokenButton(props: {
   errors: FieldErrors<Round>;
-  token?: PayoutToken;
+  token?: TToken;
 }) {
   const { token } = props;
   return (
@@ -301,19 +288,19 @@ function PayoutTokenButton(props: {
       data-testid="payout-token-select"
     >
       <span className="flex items-center">
-        {token?.logo ? (
+        {token?.icon ? (
           <img
-            src={token?.logo}
+            src={stringToBlobUrl(token.icon)}
             alt=""
             className="h-6 w-6 flex-shrink-0 rounded-full"
           />
         ) : null}
         {token?.default ? (
           <span className="ml-3 block truncate text-gray-400">
-            {token?.name}
+            {token?.code}
           </span>
         ) : (
-          <span className="ml-3 block truncate">{token?.name}</span>
+          <span className="ml-3 block truncate">{token?.code}</span>
         )}
       </span>
       <span className="pointer-events-none absolute inset-y-0 right-0 ml-3 flex items-center pr-2">
@@ -353,7 +340,7 @@ function PayoutTokenDropdown(props: {
   register: UseFormRegisterReturn<string>;
   errors: FieldErrors<Round>;
   control: Control<Round>;
-  payoutTokenOptions: PayoutToken[];
+  payoutTokenOptions: TToken[];
 }) {
   const { field } = useController({
     name: "token",
@@ -394,7 +381,7 @@ function PayoutTokenDropdown(props: {
                     (token) =>
                       !token.default && (
                         <Listbox.Option
-                          key={token.name}
+                          key={token.address}
                           className={({ active }) =>
                             classNames(
                               active
@@ -409,9 +396,9 @@ function PayoutTokenDropdown(props: {
                           {({ selected, active }) => (
                             <>
                               <div className="flex items-center">
-                                {token.logo ? (
+                                {token.icon ? (
                                   <img
-                                    src={token.logo}
+                                    src={stringToBlobUrl(token.icon)}
                                     alt=""
                                     className="h-6 w-6 flex-shrink-0 rounded-full"
                                   />
@@ -422,7 +409,7 @@ function PayoutTokenDropdown(props: {
                                     "ml-3 block truncate"
                                   )}
                                 >
-                                  {token.name}
+                                  {token.code}
                                 </span>
                               </div>
 
@@ -463,7 +450,7 @@ function MatchingFundsAvailable(props: {
   register: UseFormRegisterReturn<string>;
   errors: FieldErrors<Round>;
   token: string;
-  payoutTokenOptions: PayoutToken[];
+  payoutTokenOptions: TToken[];
 }) {
   // not sure why UseFormRegisterReturn only takes strings for react-hook-form
   return (
@@ -499,7 +486,7 @@ function MatchingFundsAvailable(props: {
             {
               props.payoutTokenOptions.find(
                 (token) => token.address === props.token
-              )?.name
+              )?.code
             }
           </span>
         </div>
@@ -522,7 +509,7 @@ function MatchingCap(props: {
   errors: FieldErrors<Round>;
   control?: Control<Round>;
   token: string;
-  payoutTokenOptions: PayoutToken[];
+  payoutTokenOptions: TToken[];
 }) {
   const { field: matchingCapField } = useController({
     name: "roundMetadata.quadraticFundingConfig.matchingCap",
@@ -702,7 +689,7 @@ function MatchingCap(props: {
         {
           props.payoutTokenOptions.find(
             (token) => token.address === props.token
-          )?.name
+          )?.code
         }
         )
       </div>
@@ -885,7 +872,7 @@ function SybilDefense(props: {
 }) {
   const { field: sybilDefenseField } = useController({
     name: "roundMetadata.quadraticFundingConfig.sybilDefense",
-    defaultValue: false,
+    defaultValue: "none",
     control: props.control,
     rules: {
       required: true,
@@ -901,7 +888,7 @@ function SybilDefense(props: {
           data-testid="sybil-defense-selection"
         >
           <div>
-            <RadioGroup.Option value={true} className="mb-2">
+            <RadioGroup.Option value={"passport-mbds"} className="mb-2">
               {({ checked, active }) => (
                 <span className="flex items-center text-sm">
                   <span
@@ -919,18 +906,32 @@ function SybilDefense(props: {
                   <RadioGroup.Label
                     as="span"
                     className="ml-3 block text-sm text-gray-700"
-                    data-testid="sybil-defense-true"
+                    data-testid="sybil-defense-auto"
                   >
-                    Yes, enable Gitcoin Passport (Recommended)
+                    Yes, enable frictionless auto-sybil screening (recommended)
                     <p className="text-xs text-gray-400">
-                      Allow matching only for donation from project supporters
-                      that have verified their identity on Gitcoin Passport.
+                      This option uses a combination of user wallet history and
+                      cluster matching to determine donation matching after your
+                      round.
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Learn more about Passport’s Model-Based Detection and
+                      cluster matching{" "}
+                      <a
+                        href="https://docs.passport.gitcoin.co/overview/readme"
+                        className="text-violet-300"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        here
+                      </a>
+                      .
                     </p>
                   </RadioGroup.Label>
                 </span>
               )}
             </RadioGroup.Option>
-            <RadioGroup.Option value={false}>
+            <RadioGroup.Option value={"passport"} className="mb-2">
               {({ checked, active }) => (
                 <span className="flex items-center text-sm">
                   <span
@@ -948,12 +949,43 @@ function SybilDefense(props: {
                   <RadioGroup.Label
                     as="span"
                     className="ml-3 block text-sm text-gray-700"
-                    data-testid="sybil-defense-false"
+                    data-testid="sybil-defense-manual"
+                  >
+                    Yes, enable manual verification
+                    <p className="text-xs text-gray-400">
+                      Allow matching only for donations from project supporters
+                      that have verified their identity on Passport using
+                      Passport stamps.
+                    </p>
+                  </RadioGroup.Label>
+                </span>
+              )}
+            </RadioGroup.Option>
+            <RadioGroup.Option value={"none"}>
+              {({ checked, active }) => (
+                <span className="flex items-center text-sm">
+                  <span
+                    className={classNames(
+                      checked
+                        ? "bg-indigo-600 border-transparent"
+                        : "bg-white border-gray-300",
+                      active ? "ring-2 ring-offset-2 ring-indigo-500" : "",
+                      "h-4 w-4 rounded-full border flex items-center justify-center"
+                    )}
+                    aria-hidden="true"
+                  >
+                    <span className="rounded-full bg-white w-1.5 h-1.5" />
+                  </span>
+                  <RadioGroup.Label
+                    as="span"
+                    className="ml-3 block text-sm text-gray-700"
+                    data-testid="sybil-defense-none"
                   >
                     No, disable Gitcoin Passport
                     <p className="text-xs text-gray-400">
-                      Allow matching for all donation, including potentially
-                      sybil ones.
+                      Opt out of Passport integrations for your round. You'll
+                      have the option to perform your own Sybil analysis after
+                      the round finishes.
                     </p>
                   </RadioGroup.Label>
                 </span>

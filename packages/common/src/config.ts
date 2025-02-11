@@ -1,6 +1,5 @@
 import { AlloVersion } from "data-layer/dist/data-layer.types";
 import { z } from "zod";
-import { ChainId } from "./chain-ids";
 
 const trueStrings = ["1", "t", "T", "TRUE", "true", "True"];
 
@@ -20,7 +19,6 @@ export type Config = {
   };
   dataLayer: {
     searchServiceBaseUrl: string;
-    subgraphEndpoints: Record<number, string>;
     gsIndexerEndpoint: string;
   };
   pinata: {
@@ -35,8 +33,17 @@ export type Config = {
   explorer: {
     disableEstimates: boolean;
   };
+  manager: {
+    disableDirectGrantsForAlloV2: boolean;
+  };
   allo: {
     version: AlloVersion;
+  };
+  passport: {
+    passportCommunityId: string;
+    passportAPIKey: string;
+    passportAvalancheCommunityId: string;
+    passportAvalancheAPIKey: string;
   };
 };
 
@@ -54,12 +61,24 @@ function getLocalStorageConfigOverrides(): LocalStorageConfigOverrides {
   return JSON.parse(configOverrides);
 }
 
+export function switchAlloVersionAndReloadPage(version: AlloVersion) {
+  const currentAlloVersion = getConfig().allo.version;
+
+  if (currentAlloVersion === version) {
+    return;
+  }
+
+  setLocalStorageConfigOverride("allo-version", version);
+  window.location.reload();
+}
+
 export function setLocalStorageConfigOverride(key: string, value: string) {
   if (typeof window === "undefined") {
     throw new Error("window is not defined");
   }
 
   const configOverrides = getLocalStorageConfigOverrides();
+
   configOverrides[key] = value;
   window.localStorage.setItem(
     "configOverrides",
@@ -84,10 +103,33 @@ function overrideConfigFromLocalStorage(config: Config): Config {
   };
 }
 
-export function getConfig(): Config {
-  if (config !== null) {
+// listen for allo version changes in other tabs
+if (typeof window !== "undefined") {
+  const currentAlloVersion = getAlloVersion();
+  window.addEventListener("storage", () => {
+    const newAlloVersion = getAlloVersion({ reload: true });
+    if (currentAlloVersion !== newAlloVersion) {
+      window.location.reload();
+    }
+  });
+}
+
+export function getAlloVersion(opts?: { reload: boolean }): AlloVersion {
+  return getConfig(opts).allo.version;
+}
+
+export function getConfig(
+  opts: { reload: boolean } = { reload: false }
+): Config {
+  if (config !== null && !opts?.reload) {
     return config;
   }
+
+  const hostnameAlloVersion =
+    typeof window !== "undefined" &&
+    window.location.hostname === "explorer-v1.gitcoin.co"
+      ? "allo-v1"
+      : undefined;
 
   config = {
     appEnv: z
@@ -106,63 +148,6 @@ export function getConfig(): Config {
         .string()
         .url()
         .parse(process.env.REACT_APP_GRANTS_STACK_SEARCH_API_BASE_URL),
-      subgraphEndpoints: {
-        [ChainId.DEV1]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_DEV1_API),
-        [ChainId.DEV2]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_DEV2_API),
-        [ChainId.PGN]: z.string().parse(process.env.REACT_APP_SUBGRAPH_PGN_API),
-        [ChainId.PGN_TESTNET]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_PGN_TESTNET_API),
-        [ChainId.MAINNET]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_MAINNET_API),
-        [ChainId.OPTIMISM_MAINNET_CHAIN_ID]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_OPTIMISM_MAINNET_API),
-        [ChainId.FANTOM_MAINNET_CHAIN_ID]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_FANTOM_MAINNET_API),
-        [ChainId.FANTOM_TESTNET_CHAIN_ID]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_FANTOM_TESTNET_API),
-        [ChainId.ARBITRUM_GOERLI]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_ARBITRUM_GOERLI_API),
-        [ChainId.ARBITRUM]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_ARBITRUM_API),
-        [ChainId.FUJI]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_FUJI_API),
-        [ChainId.AVALANCHE]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_AVALANCHE_API),
-        [ChainId.POLYGON]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_POLYGON_API),
-        [ChainId.POLYGON_MUMBAI]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_POLYGON_MUMBAI_API),
-        [ChainId.ZKSYNC_ERA_TESTNET_CHAIN_ID]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_ZKSYNC_TESTNET_API),
-        [ChainId.ZKSYNC_ERA_MAINNET_CHAIN_ID]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_ZKSYNC_MAINNET_API),
-        [ChainId.BASE]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_BASE_API),
-        [ChainId.SEPOLIA]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_SEPOLIA_API),
-        [ChainId.SCROLL]: z
-          .string()
-          .parse(process.env.REACT_APP_SUBGRAPH_SCROLL_API),
-      },
       gsIndexerEndpoint: z
         .string()
         .url()
@@ -193,14 +178,45 @@ export function getConfig(): Config {
     allo: {
       version: z
         .enum(["allo-v1", "allo-v2"])
-        .default("allo-v1")
-        .parse(process.env.REACT_APP_ALLO_VERSION),
+        .default("allo-v2")
+        .parse(hostnameAlloVersion ?? process.env.REACT_APP_ALLO_VERSION),
+    },
+    manager: {
+      disableDirectGrantsForAlloV2: config?.allo.version === "allo-v1",
+    },
+    passport: {
+      passportCommunityId: z
+        .string()
+        .parse(process.env.REACT_APP_PASSPORT_API_COMMUNITY_ID),
+      passportAPIKey: z
+        .string()
+        .default("")
+        .refine((value) => {
+          if (process.env.NODE_ENV === "production" && value.length === 0) {
+            return false;
+          }
+
+          return true;
+        }, "Passport API key is required in production")
+        .parse(process.env.REACT_APP_PASSPORT_API_KEY),
+      passportAvalancheCommunityId: z
+        .string()
+        .parse(process.env.REACT_APP_PASSPORT_API_COMMUNITY_ID_AVALANCHE),
+      passportAvalancheAPIKey: z
+        .string()
+        .default("")
+        .refine((value) => {
+          if (process.env.NODE_ENV === "production" && value.length === 0) {
+            return false;
+          }
+
+          return true;
+        }, "Passport Avalanche API key is required in production")
+        .parse(process.env.REACT_APP_PASSPORT_AVALANCHE_API_KEY),
     },
   };
 
-  if (config.appEnv === "development") {
-    config = overrideConfigFromLocalStorage(config);
-  }
+  config = overrideConfigFromLocalStorage(config);
 
   return config;
 }

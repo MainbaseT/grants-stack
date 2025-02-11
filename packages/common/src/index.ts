@@ -1,17 +1,22 @@
 import { Signer } from "@ethersproject/abstract-signer";
 import { Network, Web3Provider } from "@ethersproject/providers";
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams as useRouterParams } from "react-router";
-import { useOutletContext } from "react-router-dom";
-import useSWR from "swr";
 import z from "zod";
-import { ChainId } from "./chain-ids";
-import { graphql_fetch } from "./graphql_fetch";
+import { Round } from "data-layer";
+import { getAlloVersion, getConfig } from "./config";
+import moment from "moment-timezone";
+import { getChainById } from "@gitcoin/gitcoin-chain-data";
 
 export * from "./icons";
 export * from "./markdown";
+export * from "./allo/common";
+export * from "./allo/application";
+export * from "./payoutTokens";
 
-export { ChainId };
+export * from "./services/passport/passportCredentials";
+export { PassportVerifierWithExpiration } from "./services/passport/credentialVerifier";
+export * from "@gitcoin/gitcoin-chain-data";
 
 export function useParams<T extends Record<string, string> = never>() {
   return useRouterParams<T>() as T;
@@ -29,7 +34,7 @@ export enum PassportState {
 const PassportEvidenceSchema = z.object({
   type: z.string().nullish(),
   rawScore: z.coerce.number(),
-  threshold: z.string().nullish(),
+  threshold: z.union([z.string().nullish(), z.coerce.number()]),
 });
 
 export type PassportResponse = z.infer<typeof PassportResponseSchema>;
@@ -48,18 +53,20 @@ export const PassportResponseSchema = z.object({
  *
  * @param address
  * @param communityId
+ * @param apiKey
  * @returns
  */
 export const fetchPassport = (
   address: string,
-  communityId: string
+  communityId: string,
+  apiKey: string
 ): Promise<Response> => {
   const url = `${process.env.REACT_APP_PASSPORT_API_ENDPOINT}/registry/score/${communityId}/${address}`;
   return fetch(url, {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.REACT_APP_PASSPORT_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
     },
   });
 };
@@ -69,11 +76,13 @@ export const fetchPassport = (
  *
  * @param address string
  * @param communityId string
+ * @param apiKey string
  * @returns
  */
 export const submitPassport = (
   address: string,
-  communityId: string
+  communityId: string,
+  apiKey: string
 ): Promise<Response> => {
   const url = `${process.env.REACT_APP_PASSPORT_API_ENDPOINT}/registry/submit-passport`;
 
@@ -81,14 +90,29 @@ export const submitPassport = (
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.REACT_APP_PASSPORT_API_KEY}`,
+      "X-API-Key": `${apiKey}`,
     },
     body: JSON.stringify({
-      address,
+      address: address,
       community: communityId,
       signature: "",
       nonce: "",
     }),
+  });
+};
+
+export const submitPassportLite = (
+  address: string,
+  apiKey: string
+): Promise<Response> => {
+  const url = `${process.env.REACT_APP_PASSPORT_API_ENDPOINT}/passport/analysis/${address}`;
+
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": `${apiKey}`,
+    },
   });
 };
 
@@ -106,55 +130,6 @@ export type Payout = {
   version: string;
   createdAt: string;
 };
-
-/**
- * Fetches the payouts that happened for a given round from TheGraph
- * @param roundId Round ID
- * @param chainId Chain ID
- * @returns
- */
-// FIXME: the function should be prefixed by `use` since it's a hook
-export function fetchProjectPaidInARound(
-  roundId: string,
-  chainId: ChainId
-): Promise<Payout[]> {
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const { data } = useSWR(
-    [roundId, chainId],
-    ([roundId, chainId]: [roundId: string, chainId: ChainId]) => {
-      return graphql_fetch(
-        `
-        query GetPayouts($roundId: String) {
-          payoutStrategies(
-            where:{
-              round_:{
-                id: $roundId
-              }
-            }
-          ) {
-            payouts {
-              id
-              version
-              createdAt
-              token
-              amount
-              grantee
-              projectId
-              txnHash
-            }
-          }
-        }
-      `,
-        chainId,
-        { roundId }
-      );
-    }
-  );
-
-  const payouts = data?.data?.payoutStrategies[0]?.payouts || [];
-
-  return payouts;
-}
 
 export function formatDateWithOrdinal(date: Date) {
   const options = {
@@ -254,20 +229,52 @@ export const getUTCDateTime = (date: Date): string => {
   return `${getUTCDate(date)} ${getUTCTime(date)}`;
 };
 
+export const formatLocalDateAsISOString = (date: Date): string => {
+  // @ts-expect-error remove when DG support is merged
+  if (isNaN(date)) {
+    return "";
+  }
+  const localString = getLocalDate(date);
+  return localString;
+};
+
+export function getTimezoneName() {
+  const today = new Date();
+  const userTimeZone = moment.tz.guess();
+  const formattedDate = moment(today).tz(userTimeZone).format("z");
+
+  return formattedDate;
+}
+
+export const getLocalTime = (date: Date): string => {
+  const localTime = [
+    padSingleDigitNumberWithZero(date.getHours()),
+    padSingleDigitNumberWithZero(date.getMinutes()),
+  ];
+
+  return localTime.join(":") + " " + getTimezoneName();
+};
+
+export const getLocalDate = (date: Date): string => {
+  const localDate = [
+    padSingleDigitNumberWithZero(date.getFullYear()),
+    padSingleDigitNumberWithZero(date.getMonth() + 1),
+    padSingleDigitNumberWithZero(date.getDate()),
+  ];
+
+  return localDate.join("/");
+};
+
+export const getLocalDateTime = (date: Date): string => {
+  return `${getLocalDate(date)} ${getLocalTime(date)}`;
+};
+
 export const useTokenPrice = (tokenId: string | undefined) => {
   const [tokenPrice, setTokenPrice] = useState<number>();
-  const [error, setError] = useState<Response | undefined>();
+  const [error, setError] = useState<Error | undefined>(undefined);
   const [loading, setLoading] = useState(false);
 
-  if (!tokenId)
-    return {
-      data: 0,
-      error,
-      loading,
-    };
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useMemo(async () => {
+  useEffect(() => {
     setLoading(true);
 
     const tokenPriceEndpoint = `https://api.redstone.finance/prices?symbol=${tokenId}&provider=redstone&limit=1`;
@@ -276,25 +283,38 @@ export const useTokenPrice = (tokenId: string | undefined) => {
         if (resp.ok) {
           return resp.json();
         } else {
-          setError(resp);
-          setLoading(false);
+          return resp.text().then((text) => {
+            throw new Error(text);
+          });
         }
       })
       .then((data) => {
-        if (data) {
+        if (data && data.length > 0) {
           setTokenPrice(data[0].value);
         } else {
-          setError(data);
+          throw new Error(`No data returned: ${data.toString()}`);
         }
-
-        setLoading(false);
       })
       .catch((err) => {
-        console.log("error fetching token price", { err });
+        console.log("error fetching token price", {
+          tokenId,
+          tokenPriceEndpoint,
+          err,
+        });
         setError(err);
+      })
+      .finally(() => {
         setLoading(false);
       });
   }, [tokenId]);
+
+  if (!tokenId) {
+    return {
+      data: 0,
+      error,
+      loading,
+    };
+  }
 
   return {
     data: tokenPrice,
@@ -324,9 +344,16 @@ export type RoundPayoutTypeNew =
   | "allov2.MicroGrantsStrategy"
   | "allov2.MicroGrantsHatsStrategy"
   | "allov2.SQFSuperFluidStrategy"
-  | "allov2.MicroGrantsGovStrategy";
+  | "allov2.MicroGrantsGovStrategy"
+  | "allov2.DirectGrantsSimpleStrategy"
+  | "allov2.DirectGrantsLiteStrategy"
+  | "allov2.DirectAllocationStrategy"
+  | ""; // This is to handle the cases where the strategyName is not set in a round, mostly spam rounds
 
-export type RoundStrategyType = "QuadraticFunding" | "DirectGrants";
+export type RoundStrategyType =
+  | "QuadraticFunding"
+  | "DirectGrants"
+  | "Retrofunding";
 
 export function getRoundStrategyTitle(name: string) {
   switch (getRoundStrategyType(name)) {
@@ -335,6 +362,9 @@ export function getRoundStrategyTitle(name: string) {
 
     case "QuadraticFunding":
       return "Quadratic Funding";
+
+    case "Retrofunding":
+      return "Retro Funding";
   }
 }
 
@@ -343,12 +373,16 @@ export function getRoundStrategyType(name: string): RoundStrategyType {
     case "allov1.Direct":
     case "DIRECT":
     case "allov2.DirectGrantsSimpleStrategy":
+    case "allov2.DirectGrantsLiteStrategy":
       return "DirectGrants";
 
     case "allov1.QF":
     case "MERKLE":
     case "allov2.DonationVotingMerkleDistributionDirectTransferStrategy":
       return "QuadraticFunding";
+
+    case "allov2.EasyRetroFundingStrategy":
+      return "Retrofunding";
 
     default:
       throw new Error(`Unknown round strategy type: ${name}`);
@@ -357,15 +391,11 @@ export function getRoundStrategyType(name: string): RoundStrategyType {
 
 export type RoundVisibilityType = "public" | "private";
 
-export type { Allo } from "./allo/allo";
 export { AlloError, AlloOperation } from "./allo/allo";
+export type { Allo } from "./allo/allo";
 export { AlloV1 } from "./allo/backends/allo-v1";
 export { AlloV2 } from "./allo/backends/allo-v2";
-export {
-  createWaitForIndexerSyncTo,
-  getCurrentSubgraphBlockNumber,
-  waitForSubgraphSyncTo,
-} from "./allo/indexer";
+export { createWaitForIndexerSyncTo } from "./allo/indexer";
 export type { WaitUntilIndexerSynced } from "./allo/indexer";
 export { createPinataIpfsUploader } from "./allo/ipfs";
 export { AlloContext, AlloProvider, useAllo } from "./allo/react";
@@ -390,14 +420,6 @@ interface JsonMap {
   [key: string]: AnyJson;
 }
 type JsonArray = Array<AnyJson>;
-
-/**
- * Wrapper hook to expose wallet auth information to other components
- */
-export function useWallet() {
-  return useOutletContext<Web3Instance>();
-}
-
 export interface Web3Instance {
   /**
    * Currently selected address in ETH format i.e 0x...
@@ -415,6 +437,66 @@ export interface Web3Instance {
   signer?: Signer;
 }
 
-export { graphQlEndpoints, graphql_fetch } from "./graphql_fetch";
+export function roundToPassportIdAndKeyMap(round: Round): {
+  communityId: string;
+  apiKey: string;
+} {
+  const chainId = round?.chainId;
+  switch (chainId) {
+    case 43114: // Arbitrum
+      return {
+        communityId: getConfig().passport.passportAvalancheCommunityId,
+        apiKey: getConfig().passport.passportAvalancheAPIKey,
+      };
+    default:
+      return {
+        communityId: getConfig().passport.passportCommunityId,
+        apiKey: getConfig().passport.passportAPIKey,
+      };
+  }
+}
 
-export type { VotingToken } from "./types";
+export function roundToPassportURLMap(round: Round) {
+  const chainId = round.chainId;
+  switch (chainId) {
+    case 43114: // Arbitrum
+      return "https://passport.gitcoin.co/#/dashboard/avalanche";
+    default:
+      return "https://passport.gitcoin.co";
+  }
+}
+
+export * from "./allo/transaction-builder";
+
+/**
+ * Fetch the correct transaction block explorer link for the provided web3 network
+ *
+ * @param chainId - The chain ID of the blockchain
+ * @param txHash - The transaction hash
+ * @returns the transaction block explorer URL for the provided transaction hash and network
+ */
+export const getTxBlockExplorerLink = (chainId: number, txHash: string) => {
+  return getChainById(chainId)?.blockExplorer + "tx/" + txHash;
+};
+
+export function isChainIdSupported(chainId: number) {
+  if (chainId === 424 && getAlloVersion() === "allo-v2") {
+    return false;
+  }
+  return getChainById(chainId) !== undefined;
+}
+
+export function isLitUnavailable(chainId: number) {
+  chainId; // TODO: remove this once we have a way to check if LIT is available on a chain
+  return true;
+  // return [
+  //   4201, // LUKSO_TESTNET,
+  //   42, // LUKSO,
+  //   713715, // SEI_DEVNET,
+  //   1329, // SEI_MAINNET,
+  //   1088, // METIS
+  // ].includes(chainId);
+}
+
+export * from "./chains";
+export * from "./programWhitelist";

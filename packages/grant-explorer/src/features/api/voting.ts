@@ -9,10 +9,11 @@ import {
   slice,
   toHex,
   TypedDataDomain,
+  zeroAddress,
 } from "viem";
 import { CartProject } from "./types";
-import { WalletClient } from "wagmi";
-import { VotingToken } from "common";
+import { WalletClient } from "viem";
+import { TToken, NATIVE } from "common";
 
 type SignPermitProps = {
   walletClient: WalletClient;
@@ -147,7 +148,7 @@ export const signPermitDai = async ({
 };
 
 export function encodeQFVotes(
-  donationToken: VotingToken,
+  donationToken: TToken,
   donations: Pick<
     CartProject,
     "amount" | "recipient" | "projectRegistryId" | "applicationIndex"
@@ -156,7 +157,7 @@ export function encodeQFVotes(
   return donations.map((donation) => {
     const vote = [
       getAddress(donationToken.address),
-      parseUnits(donation.amount, donationToken.decimal),
+      parseUnits(donation.amount, donationToken.decimals),
       getAddress(donation.recipient),
       donation.projectRegistryId as Hex,
       BigInt(donation.applicationIndex),
@@ -167,4 +168,47 @@ export function encodeQFVotes(
       vote
     );
   });
+}
+
+export function encodedQFAllocation(
+  donationToken: TToken,
+  donations: Pick<
+    CartProject,
+    | "amount"
+    | "recipient"
+    | "projectRegistryId"
+    | "applicationIndex"
+    | "anchorAddress"
+  >[]
+): Hex[] {
+  const tokenAddress =
+    donationToken.address === zeroAddress ? NATIVE : donationToken.address;
+
+  const encodedData = donations.map((donation) => {
+    if (!donation.anchorAddress) {
+      throw new Error("Anchor address is required for QF allocation");
+    }
+    return encodeAbiParameters(
+      parseAbiParameters(
+        "address,uint8,(((address,uint256),uint256,uint256),bytes)"
+      ),
+      [
+        getAddress(donation.anchorAddress),
+        0, // permit type of none on the strategy
+        [
+          [
+            [
+              getAddress(tokenAddress),
+              parseUnits(donation.amount, donationToken.decimals),
+            ],
+            0n, // nonce, since permit type is none
+            0n, // deadline, since permit type is none
+          ],
+          "0x0000000000000000000000000000000000000000000000000000000000000000", // signature, since permit type is none
+        ],
+      ]
+    );
+  });
+
+  return encodedData;
 }

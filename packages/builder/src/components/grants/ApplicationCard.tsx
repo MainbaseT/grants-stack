@@ -1,15 +1,21 @@
+import { getChainById, stringToBlobUrl } from "common";
 import { Badge, Box, Button, Image, Spinner } from "@chakra-ui/react";
-import { ApplicationStatus, useDataLayer } from "data-layer";
+import {
+  ApplicationStatus,
+  RoundCategory,
+  strategyNameToCategory,
+  useDataLayer,
+} from "data-layer";
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Link } from "react-router-dom";
-import { RoundCategory } from "common/dist/types";
 import { loadRound } from "../../actions/rounds";
-import { RootState } from "../../reducers";
-import { roundApplicationViewPath } from "../../routes";
 import { ApplicationCardType, RoundSupport } from "../../types";
-import { formatDateFromSecs, isInfinite } from "../../utils/components";
-import { getNetworkIcon, networkPrettyName } from "../../utils/wallet";
+import {
+  formatDate,
+  formatDateAsNumber,
+  isInfinite,
+} from "../../utils/components";
 
 export default function ApplicationCard({
   applicationData,
@@ -20,20 +26,19 @@ export default function ApplicationCard({
   const dataLayer = useDataLayer();
   const dispatch = useDispatch();
 
-  const props = useSelector((state: RootState) => {
-    const roundState = state.rounds[applicationData.roundID];
-    const round = roundState ? roundState.round : undefined;
+  const props = useSelector(() => {
+    const { round } = applicationData.application;
 
     const support: RoundSupport | undefined = round?.roundMetadata?.support;
 
-    const payoutStrategy = round?.payoutStrategy;
+    // todo: ensure the strategy name is always set on the indexer and remove the fallback
+    const payoutStrategy = round.strategyName
+      ? strategyNameToCategory(round.strategyName)
+      : RoundCategory.QuadraticFunding;
 
-    const applicationChainName = networkPrettyName(
-      Number(applicationData.chainId)
-    );
-    const applicationChainIconUri = getNetworkIcon(
-      Number(applicationData.chainId)
-    );
+    const chain = getChainById(Number(applicationData.chainId));
+    const applicationChainName = chain.prettyName;
+    const applicationChainIconUri = stringToBlobUrl(chain.icon);
 
     const isDirectRound = payoutStrategy === RoundCategory.Direct;
 
@@ -58,10 +63,10 @@ export default function ApplicationCard({
   const renderApplicationDate = () =>
     props.round && (
       <>
-        {formatDateFromSecs(props.round?.applicationsStartTime!)} -{" "}
-        {!isInfinite(Number(props.round?.applicationsEndTime!)) &&
+        {formatDate(props.round?.applicationsStartTime!)} -{" "}
+        {!isInfinite(formatDateAsNumber(props.round?.applicationsEndTime!)) &&
         props.round?.applicationsEndTime
-          ? formatDateFromSecs(props.round?.applicationsEndTime!)
+          ? formatDate(props.round?.applicationsEndTime!)
           : "No End Date"}
       </>
     );
@@ -190,6 +195,9 @@ export default function ApplicationCard({
     return null;
   }
 
+  const applicationViewLink = `https://beta.checker.gitcoin.co/view/application/
+    ${applicationData.chainId}/${applicationData.roundID}/${applicationData.application.id}`;
+
   return (
     <Box
       p={2}
@@ -235,13 +243,7 @@ export default function ApplicationCard({
               </a>
             </p>
           )}
-          <Link
-            to={roundApplicationViewPath(
-              applicationData.chainId.toString(),
-              applicationData.roundID,
-              applicationData.application.metadataCid || ""
-            )}
-          >
+          <Link to={applicationViewLink} target="_blank">
             <Button
               backgroundColor="purple.100"
               color="purple.600"

@@ -1,9 +1,10 @@
 import {
+  getChainById,
   renderToPlainText,
   ROUND_PAYOUT_DIRECT,
   truncateDescription,
 } from "common";
-import { CHAINS, getDaysLeft, getRoundStates } from "../api/utils";
+import { getDaysLeft, getRoundStates } from "../api/utils";
 import {
   Badge,
   BasicCard,
@@ -17,8 +18,9 @@ import { RoundDaysDetails } from "./RoundDaysDetails";
 import { RoundMatchAmountBadge } from "./RoundMatchAmountBadge";
 import { RoundStrategyBadge } from "./RoundStrategyBadge";
 import { RoundTimeBadge } from "./RoundTimeBadge";
-import { RoundGetRound } from "data-layer";
-import { parseChainId, parseChainIdIntoResult } from "common/dist/chains";
+import { RoundProjects } from "./RoundProjects";
+import { Application, RoundGetRound } from "data-layer";
+import { parseChainIdIntoResult, stringToBlobUrl } from "common/dist/chains";
 
 type RoundType = "all" | "endingSoon" | "active";
 
@@ -94,7 +96,11 @@ const RoundCard = ({ round, index, roundType }: RoundCardProps) => {
     atTimeMs: Date.now(),
   });
 
-  const approvedApplicationsCount = applications?.length ?? 0;
+  const totalApplicationCount = applications?.length ?? 0;
+  const approvedApplicationCount =
+    applications?.filter(
+      (application) => (application as Application)?.status === "APPROVED"
+    ).length ?? 0;
 
   const getTrackEventValue = (roundType: RoundType, index: number) => {
     if (roundType === "all") return "round-card";
@@ -155,12 +161,11 @@ const RoundCard = ({ round, index, roundType }: RoundCardProps) => {
           <div className="border-t" />
           <div className="flex justify-between">
             <div className="flex gap-2">
-              <Badge
-                disabled={approvedApplicationsCount === 0}
-                data-testid="approved-applications-count"
-              >
-                {approvedApplicationsCount} projects
-              </Badge>
+              <RoundProjects
+                roundStates={roundStates}
+                totalApplicationCount={totalApplicationCount}
+                approvedApplications={approvedApplicationCount}
+              />
               {strategyName !== ROUND_PAYOUT_DIRECT && (
                 <RoundMatchAmountBadge
                   chainId={chainId}
@@ -172,7 +177,7 @@ const RoundCard = ({ round, index, roundType }: RoundCardProps) => {
             <div>
               <img
                 className="w-8"
-                src={CHAINS[parseChainId(chainId)]?.logo}
+                src={stringToBlobUrl(getChainById(chainId)?.icon)}
                 alt=""
               />
             </div>

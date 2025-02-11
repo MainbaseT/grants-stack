@@ -1,12 +1,15 @@
-import { Address } from "wagmi";
-import { ChainId } from "../chain-ids";
-
 export function applicationPath(p: {
-  chainId: ChainId;
-  roundId: Address;
+  chainId: number;
+  roundId: string;
   applicationId: string;
 }): string {
-  return `/#/round/${
-    p.chainId
-  }/${p.roundId.toLowerCase()}/${p.roundId.toLowerCase()}-${p.applicationId}`;
+  return `/#/round/${p.chainId}/${p.roundId.toLowerCase()}/${p.applicationId}`;
+}
+
+export function collectionPath(collectionCid: string): string {
+  return `/#/collections/${collectionCid}`;
+}
+
+export function projectPath(p: { projectId: string }): string {
+  return `/#/projects/${p.projectId}`;
 }

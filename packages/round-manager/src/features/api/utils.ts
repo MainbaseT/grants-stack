@@ -1,112 +1,15 @@
-import { StandardMerkleTree } from "@openzeppelin/merkle-tree";
 import { BigNumber, ethers } from "ethers";
 import {
   ApplicationMetadata,
+  GrantApplication,
   InputType,
   IPFSObject,
-  MatchingStatsData,
-  Program,
+  RevisedMatch,
 } from "./types";
-import { ChainId } from "common";
-
-// NB: number keys are coerced into strings for JS object keys
-export const CHAINS: Record<ChainId, Program["chain"]> = {
-  [ChainId.DEV1]: {
-    id: ChainId.DEV1,
-    name: "DEV1",
-    logo: "/logos/ethereum-eth-logo.svg",
-  },
-  [ChainId.DEV2]: {
-    id: ChainId.DEV2,
-    name: "DEV2",
-    logo: "/logos/ethereum-eth-logo.svg",
-  },
-  [ChainId.MAINNET]: {
-    id: ChainId.MAINNET,
-    name: "Mainnet", // TODO get canonical network names
-    logo: "/logos/ethereum-eth-logo.svg",
-  },
-  [ChainId.OPTIMISM_MAINNET_CHAIN_ID]: {
-    id: ChainId.OPTIMISM_MAINNET_CHAIN_ID,
-    name: "Optimism",
-    logo: "/logos/optimism-logo.svg",
-  },
-  [ChainId.FANTOM_MAINNET_CHAIN_ID]: {
-    id: ChainId.FANTOM_MAINNET_CHAIN_ID,
-    name: "Fantom",
-    logo: "/logos/fantom-logo.svg",
-  },
-  [ChainId.FANTOM_TESTNET_CHAIN_ID]: {
-    id: ChainId.FANTOM_TESTNET_CHAIN_ID,
-    name: "Fantom Testnet",
-    logo: "/logos/fantom-logo.svg",
-  },
-  [ChainId.PGN_TESTNET]: {
-    id: ChainId.PGN_TESTNET,
-    name: "PGN Testnet",
-    logo: "/logos/pgn-logo.svg",
-  },
-  [ChainId.PGN]: {
-    id: ChainId.PGN_TESTNET,
-    name: "PGN",
-    logo: "/logos/pgn-logo.svg",
-  },
-  [ChainId.ARBITRUM]: {
-    id: ChainId.ARBITRUM,
-    name: "Arbitrum",
-    logo: "/logos/arb-logo.svg",
-  },
-  [ChainId.ARBITRUM_GOERLI]: {
-    id: ChainId.ARBITRUM_GOERLI,
-    name: "Arbitrum Goerli",
-    logo: "/logos/arb-logo.svg",
-  },
-  [ChainId.AVALANCHE]: {
-    id: ChainId.AVALANCHE,
-    name: "Avalanche",
-    logo: "/logos/avax-logo.svg",
-  },
-  [ChainId.FUJI]: {
-    id: ChainId.FUJI,
-    name: "Fuji (Avalanche Testnet)",
-    logo: "/logos/avax-logo.svg",
-  },
-  [ChainId.POLYGON]: {
-    id: ChainId.POLYGON,
-    name: "Polygon PoS",
-    logo: "./logos/pol-logo.svg",
-  },
-  [ChainId.POLYGON_MUMBAI]: {
-    id: ChainId.POLYGON_MUMBAI,
-    name: "Polygon Mumbai",
-    logo: "./logos/pol-logo.svg",
-  },
-  [ChainId.BASE]: {
-    id: ChainId.BASE,
-    name: "Base",
-    logo: "/logos/base-logo.svg",
-  },
-  [ChainId.ZKSYNC_ERA_MAINNET_CHAIN_ID]: {
-    id: ChainId.ZKSYNC_ERA_MAINNET_CHAIN_ID,
-    name: "zkSync Era",
-    logo: "/logos/zksync-logo.svg",
-  },
-  [ChainId.ZKSYNC_ERA_TESTNET_CHAIN_ID]: {
-    id: ChainId.ZKSYNC_ERA_TESTNET_CHAIN_ID,
-    name: "zkSync Era Testnet",
-    logo: "/logos/zksync-logo.svg",
-  },
-  [ChainId.SEPOLIA]: {
-    id: ChainId.SEPOLIA,
-    name: "Sepolia",
-    logo: "/logos/ethereum-eth-logo.svg",
-  },
-  [ChainId.SCROLL]: {
-    id: ChainId.SCROLL,
-    name: "Scroll",
-    logo: "/logos/scroll-logo.svg",
-  },
-};
+import { useEffect, useState } from "react";
+import Papa from "papaparse";
+import { getChainById } from "common";
+import { ProjectApplicationForManager } from "data-layer";
 
 export type SupportType = {
   name: string;
@@ -121,15 +24,15 @@ export type SupportType = {
  * @param cid - the unique content identifier that points to the data
  */
 export const fetchFromIPFS = (cid: string) => {
-  return fetch(
-    `https://${process.env.REACT_APP_PINATA_GATEWAY}/ipfs/${cid}`
-  ).then((resp) => {
-    if (resp.ok) {
-      return resp.json();
-    }
+  return fetch(`${process.env.REACT_APP_IPFS_BASE_URL}/ipfs/${cid}`).then(
+    (resp) => {
+      if (resp.ok) {
+        return resp.json();
+      }
 
-    return Promise.reject(resp);
-  });
+      return Promise.reject(resp);
+    }
+  );
 };
 
 /**
@@ -268,58 +171,10 @@ export function typeToText(s: string) {
  * explorer for the given chain ID and contract address
  */
 export const getTxExplorerForContract = (
-  chainId: ChainId,
+  chainId: number,
   contractAddress: string
 ) => {
-  switch (chainId) {
-    case ChainId.OPTIMISM_MAINNET_CHAIN_ID:
-      return `https://optimistic.etherscan.io/address/${contractAddress}`;
-
-    case ChainId.FANTOM_MAINNET_CHAIN_ID:
-      return `https://ftmscan.com/address/${contractAddress}`;
-
-    case ChainId.FANTOM_TESTNET_CHAIN_ID:
-      return `https://testnet.ftmscan.com/address/${contractAddress}`;
-
-    case ChainId.MAINNET:
-      return `https://etherscan.io/address/${contractAddress}`;
-  }
-};
-/**
- * Generate merkle tree
- *
- * To get merkle Proof: tree.getProof(distributions[0]);
- * @param matchingResults MatchingStatsData[]
- * @returns
- */
-export const generateMerkleTree = (
-  matchingResults: MatchingStatsData[]
-): {
-  distribution: [number, string, BigNumber, string][];
-  tree: StandardMerkleTree<[number, string, BigNumber, string]>;
-  matchingResults: MatchingStatsData[];
-} => {
-  const distribution: [number, string, BigNumber, string][] = [];
-
-  matchingResults.forEach((matchingResult, index) => {
-    matchingResults[index].index = index;
-
-    distribution.push([
-      index,
-      matchingResult.projectPayoutAddress,
-      matchingResult.matchAmountInToken, // TODO: FIX
-      matchingResult.projectId,
-    ]);
-  });
-
-  const tree = StandardMerkleTree.of(distribution, [
-    "uint256",
-    "address",
-    "uint256",
-    "bytes32",
-  ]);
-
-  return { distribution, tree, matchingResults };
+  return getChainById(chainId).blockExplorer + "address/" + contractAddress;
 };
 
 export const formatCurrency = (
@@ -332,4 +187,111 @@ export const formatCurrency = (
   ).toLocaleString("en-US", {
     maximumFractionDigits: fraction || 3,
   });
+};
+
+export const useMatchCSVParser = (file: File | null) => {
+  const [data, setData] = useState<RevisedMatch[] | undefined>(undefined);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<Error | undefined>(undefined);
+
+  useEffect(() => {
+    if (!file) {
+      setData(undefined);
+      setError(undefined);
+      return;
+    }
+
+    const parseCSV = (file: File) => {
+      setLoading(true);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = reader.result as string;
+        Papa.parse(text, {
+          header: true,
+          skipEmptyLines: true,
+          complete: (results) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const matches: RevisedMatch[] = results.data.map((row: any) => ({
+              revisedContributionCount: parseInt(row["contributionsCount"]),
+              revisedMatch: BigInt(row["matched"]),
+              matched: BigInt(row["matched"]),
+              contributionsCount: parseInt(row["contributionsCount"]),
+              projectId: row["projectId"],
+              applicationId: row["applicationId"],
+              projectName: row["projectName"],
+              payoutAddress: row["payoutAddress"],
+            }));
+            setData(matches);
+            setLoading(false);
+          },
+          error: (error: Error) => {
+            setError(error);
+            setLoading(false);
+          },
+        });
+      };
+      reader.onerror = (error: Event) => {
+        setError(error as unknown as Error);
+        setLoading(false);
+      };
+      reader.readAsText(file);
+    };
+
+    parseCSV(file);
+  }, [file]);
+
+  return { data, loading, error };
+};
+
+export const convertApplications = (
+  dataLayerApplications: ProjectApplicationForManager[]
+) => {
+  const applications: GrantApplication[] = dataLayerApplications.flatMap(
+    (application) => {
+      if (application.canonicalProject === null) {
+        console.error(
+          `Canonical project not found for application ${application.id}`
+        );
+        return [];
+      }
+
+      if (application.metadata === null) {
+        return [];
+      }
+
+      return [
+        {
+          id: application.id,
+          applicationIndex: Number(application.id),
+          round: application.roundId,
+          status: application.status,
+          metadata: application.metadata,
+          project: {
+            ...application.metadata.application.project,
+            owners: application.canonicalProject.roles,
+            id: application.projectId,
+          },
+          projectId: application.projectId,
+          inReview: application.status === "IN_REVIEW",
+          recipient: application.metadata.application.recipient,
+          createdAt: "0",
+          projectsMetaPtr: { protocol: 1, pointer: "" },
+          payoutStrategy: {
+            strategyName: application.round.strategyName,
+            id: application.round.strategyAddress,
+            payouts: [],
+          },
+          distributionTransaction: application.distributionTransaction,
+          statusSnapshots: application.statusSnapshots.map((snapshot) => ({
+            ...snapshot,
+            updatedAt: new Date(snapshot.updatedAt),
+          })),
+          anchorAddress: application.anchorAddress,
+          answers: application.metadata.application.answers,
+        },
+      ];
+    }
+  );
+
+  return applications;
 };

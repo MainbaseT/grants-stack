@@ -1,5 +1,4 @@
 import { Abi, ExtractAbiEventNames } from "abitype";
-import ethers from "ethers";
 import {
   Address,
   decodeEventLog,
@@ -10,17 +9,23 @@ import {
   Hex,
   Log,
   PublicClient,
+  TransactionNotFoundError,
   WalletClient,
   zeroAddress,
 } from "viem";
 
 import { AlloError } from "./allo";
 import { error, Result, success } from "./common";
+import {
+  FallbackProvider,
+  JsonRpcProvider,
+  JsonRpcSigner,
+} from "@ethersproject/providers";
 
 export interface TransactionData {
   to: Hex;
-  data: Hex;
-  value: bigint;
+  data?: Hex;
+  value?: bigint;
 }
 
 export interface TransactionReceipt {
@@ -86,8 +91,8 @@ export function decodeEventFromReceipt<
 }
 
 export function createEthersTransactionSender(
-  signer: ethers.Signer,
-  provider: ethers.providers.Provider
+  signer: JsonRpcSigner,
+  provider: JsonRpcProvider | FallbackProvider
 ): TransactionSender {
   return {
     async send(tx: TransactionData): Promise<Hex> {
@@ -150,23 +155,35 @@ export function createViemTransactionSender(
       timeout?: number,
       customPublicClient?: PublicClient
     ): Promise<TransactionReceipt> {
-      const receipt = await (
-        customPublicClient ?? publicClient
-      ).waitForTransactionReceipt({
-        hash: txHash,
-        timeout: timeout,
-      });
+      for (let i = 0; i < 5; i++) {
+        try {
+          const receipt = await (
+            customPublicClient ?? publicClient
+          ).waitForTransactionReceipt({
+            hash: txHash,
+            timeout: timeout,
+          });
 
-      return {
-        transactionHash: receipt.transactionHash,
-        blockHash: receipt.blockHash,
-        blockNumber: receipt.blockNumber,
-        logs: receipt.logs.map((log: Log) => ({
-          data: log.data,
-          topics: log.topics,
-        })),
-        status: receipt.status,
-      };
+          return {
+            transactionHash: receipt.transactionHash,
+            blockHash: receipt.blockHash,
+            blockNumber: receipt.blockNumber,
+            logs: receipt.logs.map((log: Log) => ({
+              data: log.data,
+              topics: log.topics,
+            })),
+            status: receipt.status,
+          };
+        } catch (e) {
+          if (e instanceof TransactionNotFoundError) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+
+          throw e;
+        }
+      }
+
+      throw new Error("Transaction not found after 5 retries");
     },
 
     async address(): Promise<Address> {
@@ -254,21 +271,41 @@ export async function sendRawTransaction(
 
 export async function sendTransaction<
   TAbi extends Abi,
-  TFunctionName extends string,
+  TFunctionName extends `0x${string}`,
 >(
   sender: TransactionSender,
-  args: EncodeFunctionDataParameters<TAbi, TFunctionName> & {
-    address: Address;
-    value?: bigint;
-  }
+  args:
+    | (EncodeFunctionDataParameters<TAbi, TFunctionName> & {
+        address: Address;
+      })
+    | { address: Address; value: bigint }
+    | { address: Address; data: Hex }
+    | { address: Address; value: bigint; data: Hex }
 ): Promise<Result<Hex>> {
   try {
-    const data = encodeFunctionData(args);
+    let data: Hex | undefined;
+    let value: bigint | undefined;
+
+    if ("value" in args) {
+      value = args.value;
+    }
+
+    if ("data" in args) {
+      data = args.data;
+    }
+
+    if ("functionName" in args) {
+      data = encodeFunctionData({
+        abi: args.abi as Abi,
+        functionName: args.functionName as string,
+        args: args.args as unknown[],
+      });
+    }
 
     const tx = await sender.send({
       to: args.address,
       data: data,
-      value: args.value ?? 0n,
+      value: value,
     });
 
     return success(tx);

@@ -1,3 +1,5 @@
+import { WagmiProvider } from "wagmi";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { ChakraProvider } from "@chakra-ui/react";
 import { VerifiableCredential } from "@gitcoinco/passport-sdk-types";
 import { ReduxRouter } from "@lagunovsky/redux-react-router";
@@ -15,8 +17,8 @@ import {
 } from "data-layer";
 import { ethers } from "ethers";
 import { Provider } from "react-redux";
-import { zeroAddress } from "viem";
 import { getConfig } from "common/src/config";
+import queryClient, { config } from "./wagmi";
 import history from "../history";
 import setupStore from "../store";
 import { FormInputs, Metadata, Round } from "../types";
@@ -54,6 +56,8 @@ export const buildRound = (round: any): Round => ({
   applicationMetadata: {},
   programName: "test-program",
   payoutStrategy: "0x",
+  strategyName: "allov1.QF",
+  tags: ["allo-v1"],
   ...round,
 });
 
@@ -104,7 +108,7 @@ export const buildProjectMetadata = (metadata: any): Metadata => ({
   },
   createdAt: 123,
   updatedAt: 123,
-  chainId: 5,
+  chainId: 10,
   linkedChains: [1],
   nonce: BigInt(1),
   registryAddress: "0x1",
@@ -126,7 +130,7 @@ export const buildFormMetadata = (metadata: any): FormInputs => ({
 export const buildProjectApplication = (
   application: any
 ): ProjectApplicationWithRound => ({
-  chainId: 5,
+  chainId: 10,
   roundId: addressFrom(1),
   status: "APPROVED",
   id: "1",
@@ -156,7 +160,7 @@ export const buildProjectApplication = (
 });
 
 const alloBackend = new AlloV2({
-  chainId: 5,
+  chainId: 10,
   ipfsUploader: async () =>
     Promise.resolve({
       type: "success",
@@ -164,7 +168,6 @@ const alloBackend = new AlloV2({
     }),
   waitUntilIndexerSynced: async () => Promise.resolve(BigInt(1)),
   transactionSender: createMockTransactionSender(),
-  allo: zeroAddress,
 });
 
 // todo: introduce mock data layer?
@@ -174,9 +177,6 @@ const dataLayerConfig = new DataLayer({
     pagination: {
       pageSize: 50,
     },
-  },
-  subgraph: {
-    endpointsByChainId: "http://localhost/",
   },
   indexer: {
     baseUrl: "http://localhost/",
@@ -188,17 +188,21 @@ export const renderWrapped = (
   store = setupStore()
 ): any => {
   const wrapped = (
-    <ChakraProvider>
-      <Provider store={store}>
-        <AlloProvider backend={alloBackend}>
-          <DataLayerProvider client={dataLayerConfig}>
-            <ReduxRouter store={store} history={history}>
-              {ui}
-            </ReduxRouter>
-          </DataLayerProvider>
-        </AlloProvider>
-      </Provider>
-    </ChakraProvider>
+    <WagmiProvider config={config}>
+      <QueryClientProvider client={queryClient}>
+        <ChakraProvider>
+          <Provider store={store}>
+            <AlloProvider backend={alloBackend}>
+              <DataLayerProvider client={dataLayerConfig}>
+                <ReduxRouter store={store} history={history}>
+                  {ui}
+                </ReduxRouter>
+              </DataLayerProvider>
+            </AlloProvider>
+          </Provider>
+        </ChakraProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
   );
 
   return { store, ...render(wrapped) };

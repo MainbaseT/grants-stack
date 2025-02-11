@@ -1,9 +1,6 @@
-import { VerifiableCredential } from "@gitcoinco/passport-sdk-types";
-import { PassportVerifier } from "@gitcoinco/passport-sdk-verifier";
 import { getAddress } from "viem";
 import { describe, expect, test, vi } from "vitest";
 import {
-  ProjectApplication,
   ProjectApplicationMetadata,
   ProjectApplicationWithRound,
   v2Project,
@@ -66,7 +63,13 @@ const mockApplications: ProjectApplicationWithRound[] = [
     status: "PENDING",
     metadataCid: "",
     metadata: {} as ProjectApplicationMetadata,
+    totalDonationsCount: 0,
+    totalAmountDonatedInUsd: 0,
+    uniqueDonorsCount: 0,
+    distributionTransaction: null,
+    anchorAddress: getAddress("0xe849b2a694184b8739a04c915518330757cdb133"),
     round: {
+      strategyName: "allov1.QF",
       applicationsStartTime: "2024-02-20T17:27:40+00:00",
       applicationsEndTime: "2024-02-27T17:24:40+00:00",
       donationsStartTime: "2024-02-20T18:54:40+00:00",
@@ -557,38 +560,6 @@ describe("applications search", () => {
   });
 });
 
-describe("passport verification", () => {
-  test("invokes passport verifier", async () => {
-    const mockPassportVerifier = {
-      verifyCredential: vi.fn().mockResolvedValue(true),
-    } as unknown as PassportVerifier;
-
-    const dataLayer = new DataLayer({
-      search: { baseUrl: "https://example.com" },
-      subgraph: { endpointsByChainId: {} },
-      passport: { verifier: mockPassportVerifier },
-      indexer: { baseUrl: "https://example.com" },
-    });
-
-    const { isVerified } = await dataLayer.verifyPassportCredential({
-      "@context": ["https://www.w3.org/2018/credentials/v1"],
-      type: ["VerifiableCredential"],
-      credentialSubject: {
-        id: "did:pkh:eip155:1:subject",
-      },
-    } as VerifiableCredential);
-
-    expect(isVerified).toBe(true);
-    expect(mockPassportVerifier.verifyCredential).toBeCalledWith({
-      "@context": ["https://www.w3.org/2018/credentials/v1"],
-      type: ["VerifiableCredential"],
-      credentialSubject: {
-        id: "did:pkh:eip155:1:subject",
-      },
-    });
-  });
-});
-
 describe("v2 projects retrieval", () => {
   test("can retrieve project by id", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -602,8 +573,9 @@ describe("v2 projects retrieval", () => {
     const dataLayer = new DataLayer({
       fetch: fetchMock,
       search: { baseUrl: "https://example.com" },
-      subgraph: { endpointsByChainId: {} },
-      indexer: { baseUrl: "https://indexer-staging.fly.dev/graphql" },
+      indexer: {
+        baseUrl: "https://grants-stack-indexer-v2.gitcoin.co/graphql",
+      },
     });
 
     const project = await dataLayer.getProjectById({
@@ -640,8 +612,9 @@ describe("v2 projects retrieval", () => {
     const dataLayer = new DataLayer({
       fetch: fetchMock,
       search: { baseUrl: "https://example.com" },
-      subgraph: { endpointsByChainId: {} },
-      indexer: { baseUrl: "https://indexer-staging.fly.dev/graphql" },
+      indexer: {
+        baseUrl: "https://grants-stack-indexer-v2.gitcoin.co/graphql",
+      },
     });
 
     const projects = await dataLayer.getProjectsByAddress({
@@ -674,13 +647,15 @@ describe("v2 projects retrieval", () => {
     const dataLayer = new DataLayer({
       fetch: fetchMock,
       search: { baseUrl: "https://example.com" },
-      subgraph: { endpointsByChainId: {} },
-      indexer: { baseUrl: "https://indexer-staging.fly.dev/graphql" },
+      indexer: {
+        baseUrl: "https://grants-stack-indexer-v2.gitcoin.co/graphql",
+      },
     });
 
-    const applications = await dataLayer.getApplicationsByProjectId({
-      projectId:
+    const applications = await dataLayer.getApplicationsByProjectIds({
+      projectIds: [
         "0x8a79249b63395c25bd121ba6ff280198c399d4fb3f951fc3c42197b54a6db6a6",
+      ],
       chainIds: [11155111],
     });
 

@@ -16,6 +16,12 @@ export interface RoundState {
   currentRoundId?: string;
 }
 
+export class RoundNotFoundError extends Error {
+  constructor(chainId: number, roundId: string) {
+    super(`Round not found: chainId=${chainId}, roundId=${roundId}`);
+  }
+}
+
 enum ActionType {
   SET_LOADING = "SET_LOADING",
   FINISH_LOADING = "FINISH_LOADING",
@@ -64,6 +70,8 @@ const roundReducer = (state: RoundState, action: Action) => {
         getRoundByIdError: undefined,
       };
     case ActionType.SET_ERROR_GET_ROUND:
+      // log error to console to be sure we can debug it
+      console.error(action.payload);
       return { ...state, getRoundByIdError: action.payload };
     case ActionType.SET_ROUND_ID:
       return { ...state, currentRoundId: action.payload };
@@ -74,7 +82,6 @@ const roundReducer = (state: RoundState, action: Action) => {
 
 export const RoundProvider = ({ children }: { children: ReactNode }) => {
   const [state, dispatch] = useReducer(roundReducer, initialRoundState);
-
   const providerProps = { state, dispatch };
 
   return (
@@ -93,13 +100,21 @@ function fetchRoundsById(
   dispatch({ type: ActionType.SET_LOADING, payload: true });
 
   dataLayer
-    .getLegacyRoundById({
+    .getRoundForExplorer({
       roundId,
       chainId,
     })
-    .then(({ round }) =>
-      dispatch({ type: ActionType.ADD_ROUND, payload: round })
-    )
+    .then((result) => {
+      if (result === null) {
+        dispatch({
+          type: ActionType.SET_ERROR_GET_ROUND,
+          payload: new RoundNotFoundError(chainId, roundId),
+        });
+      } else {
+        const { round } = result;
+        dispatch({ type: ActionType.ADD_ROUND, payload: round });
+      }
+    })
     .catch((error) =>
       dispatch({ type: ActionType.SET_ERROR_GET_ROUND, payload: error })
     )
@@ -124,7 +139,7 @@ export const useRoundById = (
     context.dispatch({ type: ActionType.SET_ROUND_ID, payload: roundId });
     if (roundId) {
       const existingRound = context.state.rounds.find(
-        (round) => round.id === roundId
+        (round) => round.id === roundId && round.chainId === chainId
       );
 
       if (!existingRound?.token) {
@@ -133,11 +148,53 @@ export const useRoundById = (
     }
   }, [chainId, roundId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const round = context.state.rounds.find((round) => round.id === roundId);
+  const round = context.state.rounds.find(
+    (round) => round.id === roundId && round.chainId === chainId
+  );
 
   return {
     round: round,
     isLoading: context.state.isLoading,
     getRoundByIdError: context.state.getRoundByIdError,
   };
+};
+
+import { useQuery } from "@tanstack/react-query";
+
+export const useRoundNamesByIds = (rounds: Record<number, string>) => {
+  const dataLayer = useDataLayer();
+
+  return useQuery({
+    queryKey: ["roundNamesByIds", rounds], // Query key
+    enabled: !!rounds && Object.keys(rounds).length > 0, // Only fetch if there are rounds
+    queryFn: async () => {
+      if (!rounds) {
+        return {};
+      }
+      // Create an empty object to store chainId -> roundId -> roundName
+      const roundNames: Record<number, Record<string, string>> = {};
+
+      await Promise.all(
+        Object.entries(rounds).map(async ([chainId, roundId]) => {
+          // If the name is missing, fetch the round data
+          const fetchedRound = (
+            await dataLayer.getRoundForExplorer({
+              roundId,
+              chainId: Number(chainId),
+            })
+          )?.round;
+
+          // Store the fetched round name in the result object
+          if (fetchedRound?.roundMetadata?.name) {
+            if (!roundNames[Number(chainId)]) {
+              roundNames[Number(chainId)] = {};
+            }
+            roundNames[Number(chainId)][roundId] =
+              fetchedRound.roundMetadata.name;
+          }
+        })
+      );
+      return roundNames;
+    },
+  });
 };

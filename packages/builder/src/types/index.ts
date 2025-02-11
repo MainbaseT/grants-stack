@@ -1,9 +1,7 @@
-import { ProjectApplicationWithRound } from "data-layer";
 import { VerifiableCredential } from "@gitcoinco/passport-sdk-types";
-import { ChainId } from "common";
-import { ReactNode } from "react";
+import { ProjectApplicationWithRound, RoundCategory } from "data-layer";
 import { RoundApplicationMetadata } from "data-layer/dist/roundApplication.types";
-import { RoundCategory } from "common/dist/types";
+import { ReactNode } from "react";
 
 export type Images = {
   bannerImg?: Blob;
@@ -151,6 +149,7 @@ export type Round = {
   applicationMetadata: RoundApplicationMetadata;
   programName: string;
   payoutStrategy: RoundCategory;
+  tags: string[];
 };
 
 export enum RoundDisplayType {
@@ -162,7 +161,7 @@ export enum RoundDisplayType {
 export type ApplicationCardType = {
   application: ProjectApplicationWithRound;
   roundID: string;
-  chainId: ChainId;
+  chainId: number;
 };
 
 export type ProjectOption = {
@@ -170,7 +169,7 @@ export type ProjectOption = {
   anchor?: string;
   title?: string;
   chainInfo?: {
-    chainId: ChainId;
+    chainId: number;
     chainName: string;
     icon?: any;
   };

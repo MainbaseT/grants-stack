@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Dialog, Listbox, Transition } from "@headlessui/react";
 import { ChevronDownIcon, PlusIcon, XCircleIcon } from "@heroicons/react/solid";
 import { Button } from "common/src/styles";
@@ -8,6 +7,8 @@ import { SchemaQuestion, typeToText } from "../api/utils";
 import BaseSwitch from "./BaseSwitch";
 import { InputIcon } from "./InputIcon";
 import Option from "./Option";
+import { isLitUnavailable } from "common";
+import { useAccount } from "wagmi";
 
 const INITIAL_VALUE = "Select a type";
 
@@ -37,6 +38,8 @@ function AddQuestionModal({
   onClose,
 }: AddQuestionModalProps) {
   const questionExists = question && question.index !== undefined;
+
+  const { chainId } = useAccount();
 
   const [isOpen, setIsOpen] = useState(show);
   const initialQuestion = question;
@@ -82,6 +85,7 @@ function AddQuestionModal({
         <BaseSwitch
           testid="encrypted-toggle"
           key="encrypted"
+          disabled={isLitUnavailable(chainId!)}
           activeLabel="Encrypted"
           inactiveLabel="Not Encrypted"
           value={
@@ -180,7 +184,7 @@ function AddQuestionModal({
           <Option
             index={i + 1}
             value={questionOptions.choices?.[i] || ""}
-            onChange={(event: any) => {
+            onChange={(event) => {
               event.preventDefault();
               if (questionOptions.choices?.length)
                 setQuestionOptions({

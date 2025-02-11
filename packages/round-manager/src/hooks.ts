@@ -1,8 +1,8 @@
-import useSWR from "swr";
 import { Client } from "allo-indexer-client";
-import { useWallet } from "./features/common/Auth";
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
+import useSWR from "swr";
+import { useAccount } from "wagmi";
 
 export function useDebugMode(): boolean {
   const [searchParams] = useSearchParams();
@@ -15,15 +15,18 @@ export function useDebugMode(): boolean {
 }
 
 export function useAlloIndexerClient(): Client {
-  const { chain } = useWallet();
+  const { chainId } = useAccount();
 
   return useMemo(() => {
+    if (!chainId) {
+      throw new Error("Chain ID is not set");
+    }
     return new Client(
       fetch.bind(window),
-      process.env.REACT_APP_ALLO_API_URL ?? "",
-      chain.id
+      process.env.REACT_APP_INDEXER_V2_API_URL ?? "",
+      chainId
     );
-  }, [chain.id]);
+  }, [chainId]);
 }
 
 export function useRoundMatchingFunds(
@@ -40,7 +43,7 @@ export function useRoundMatchingFunds(
   );
 }
 
-export function useRound(roundId: string) {
+export function useRound(roundId: string | number) {
   const client = useAlloIndexerClient();
   return useSWR([roundId, "/stats"], ([roundId]) => {
     return client.getRoundBy("id", roundId);

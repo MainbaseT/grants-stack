@@ -5,7 +5,7 @@ import { Logger } from "ethers/lib.esm/utils";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ReactTooltip from "react-tooltip";
-import { useAccount, useBalance, useNetwork } from "wagmi";
+import { useAccount, useBalance } from "wagmi";
 import { errorModalDelayMs } from "../../constants";
 import { useFundContract } from "../../context/round/FundContractContext";
 import { ProgressStatus, Round } from "../api/types";
@@ -14,17 +14,139 @@ import ConfirmationModal from "../common/ConfirmationModal";
 import ErrorModal from "../common/ErrorModal";
 import ProgressModal from "../common/ProgressModal";
 import { Spinner } from "../common/Spinner";
-import { classNames, useTokenPrice } from "common";
+import {
+  TToken,
+  classNames,
+  getPayoutTokens,
+  stringToBlobUrl,
+  useAllo,
+  useTokenPrice,
+} from "common";
 import { assertAddress } from "common/src/address";
-import { payoutTokens } from "../api/payoutTokens";
+import { formatUnits, zeroAddress } from "viem";
+import { Erc20__factory } from "../../types/generated/typechain";
+import { getAlloAddress } from "common/src/allo/backends/allo-v2";
+import { JsonRpcSigner } from "@ethersproject/providers";
+import { getEthersSigner } from "../../app/wagmi";
+
+// fixme: move this to its own hook
+export function useContractAmountFunded(args: {
+  round: Round | undefined;
+  payoutToken: TToken | undefined;
+}):
+  | {
+      isLoading: true;
+      error: undefined;
+      data: undefined;
+    }
+  | {
+      isLoading: false;
+      error: Error;
+      data: undefined;
+    }
+  | {
+      isLoading: false;
+      error: undefined;
+      data: {
+        fundedAmount: bigint;
+        fundedAmountInUsd: number | undefined;
+      };
+    } {
+  const { round, payoutToken } = args;
+
+  const isAlloV2 = round?.tags?.includes("allo-v2");
+
+  const { data: balanceData, error: balanceError } = useBalance(
+    isAlloV2 || round === undefined
+      ? undefined
+      : {
+          address: assertAddress(round?.id),
+          token:
+            payoutToken?.address !== undefined &&
+            payoutToken.address === "0x0000000000000000000000000000000000000000"
+              ? undefined
+              : assertAddress(payoutToken?.address),
+        }
+  );
+
+  const { data: priceData, error: priceError } = useTokenPrice(
+    payoutToken?.redstoneTokenId
+  );
+
+  if (isAlloV2) {
+    if (round !== undefined) {
+      if (
+        round.fundedAmount === undefined ||
+        round.fundedAmountInUsd === undefined
+      ) {
+        return {
+          isLoading: false,
+          data: undefined,
+          error: new Error("Amount funded is not available for Allo V2"),
+        };
+      }
+
+      return {
+        isLoading: false,
+        error: undefined,
+        data: {
+          fundedAmount: round.fundedAmount,
+          fundedAmountInUsd: round.fundedAmountInUsd,
+        },
+      };
+    } else {
+      return {
+        isLoading: true,
+        error: undefined,
+        data: undefined,
+      };
+    }
+  }
+
+  if (balanceData !== undefined) {
+    return {
+      isLoading: false,
+      error: undefined,
+      data: {
+        fundedAmount: BigInt(balanceData.value.toString()),
+        fundedAmountInUsd: priceData
+          ? Number(balanceData.formatted) * Number(priceData)
+          : undefined,
+      },
+    };
+  }
+
+  if (balanceError !== null) {
+    return {
+      isLoading: false,
+      error: balanceError,
+      data: undefined,
+    };
+  }
+
+  if (priceError !== undefined) {
+    return {
+      isLoading: false,
+      error: priceError,
+      data: undefined,
+    };
+  }
+
+  return {
+    isLoading: true,
+    error: undefined,
+    data: undefined,
+  };
+}
 
 export default function FundContract(props: {
   round: Round | undefined;
   roundId: string | undefined;
 }) {
-  const { address } = useAccount();
   const navigate = useNavigate();
 
+  const { address, chainId, isConnected, connector } = useAccount();
+  const [signer, setSigner] = useState<JsonRpcSigner>();
   const [amountToFund, setAmountToFund] = useState("");
   const [insufficientBalance, setInsufficientBalance] = useState(false);
   const [openConfirmationModal, setOpenConfirmationModal] = useState(false);
@@ -35,8 +157,15 @@ export default function FundContract(props: {
   >();
   const [transactionReplaced, setTransactionReplaced] = useState(false);
 
-  const { chain } = useNetwork() || {};
-  const chainId = chain?.id ?? 5;
+  useEffect(() => {
+    const init = async () => {
+      const s = await getEthersSigner(connector!, chainId!);
+      setSigner(s);
+    };
+    if (isConnected && chainId && connector?.getAccounts) init();
+  }, [chainId, isConnected, connector]);
+
+  const allo = useAllo();
 
   const {
     fundContract,
@@ -89,23 +218,23 @@ export default function FundContract(props: {
     props.roundId,
   ]);
 
-  const matchingFundPayoutToken =
-    props.round &&
-    payoutTokens.filter(
-      (t) =>
-        t.address.toLowerCase() === props.round?.token?.toLowerCase() &&
-        t.chainId === props.round?.chainId
-    )[0];
+  const tokens = props.round?.chainId
+    ? getPayoutTokens(props.round.chainId)
+    : [];
 
+  const matchingFundPayoutToken = tokens.find(
+    (t) => t.address.toLowerCase() === props.round?.token?.toLowerCase()
+  );
+  const { isLoading, data } = useContractAmountFunded({
+    round: props.round,
+    payoutToken: matchingFundPayoutToken,
+  });
+
+  const amountFundedInUnits = formatUnits(
+    data?.fundedAmount ?? 0n,
+    matchingFundPayoutToken?.decimals ?? 18
+  );
   // todo: replace 0x0000000000000000000000000000000000000000 with native token for respective chain
-  const tokenDetail = {
-    address: assertAddress(props.roundId),
-    token:
-      matchingFundPayoutToken?.address ===
-      "0x0000000000000000000000000000000000000000"
-        ? undefined
-        : assertAddress(matchingFundPayoutToken?.address),
-  };
 
   const tokenDetailUser =
     matchingFundPayoutToken?.address == ethers.constants.AddressZero
@@ -115,70 +244,39 @@ export default function FundContract(props: {
           token: assertAddress(matchingFundPayoutToken?.address),
         };
 
-  const {
-    data: balanceData,
-    isError: isBalanceError,
-    isLoading: isBalanceLoading,
-  } = useBalance(tokenDetail);
-
-  const { data, error, loading } = useTokenPrice(
-    matchingFundPayoutToken?.redstoneTokenId
-  );
-
   const matchingFunds =
     (props.round &&
       props.round.roundMetadata.quadraticFundingConfig
         ?.matchingFundsAvailable) ??
     0;
 
-  const matchingFundsInUSD =
-    matchingFunds && data && !loading && !error && matchingFunds * Number(data);
-
-  const amountLeftToFund =
-    matchingFunds && matchingFunds - Number(balanceData?.formatted ?? 0);
+  const matchingFundsInUSD = props.round?.matchAmountInUsd;
 
   const amountLeftToFundInUSD =
-    amountLeftToFund && amountLeftToFund * Number(data ?? 0);
+    matchingFundsInUSD && matchingFundsInUSD - Number(data?.fundedAmountInUsd);
 
   // NOTE: round and protocol fee percentages are stored as decimals
   const roundFeePercentage = (props.round?.roundFeePercentage ?? 0) * 100;
   const protocolFeePercentage = (props.round?.protocolFeePercentage ?? 0) * 100;
   const combinedFees =
     ((roundFeePercentage + protocolFeePercentage) * matchingFunds) / 100;
-  const contractBalance = ethers.utils.formatUnits(
-    balanceData?.value.toString() ?? "0",
-    matchingFundPayoutToken?.decimal
-  );
-  const totalAmountLeftToFund = (
-    combinedFees +
-    matchingFunds -
-    Number(contractBalance)
-  ).toString();
+
+  const totalAmountLeftToFund =
+    combinedFees + matchingFunds - Number(amountFundedInUnits);
+
   const totalDue = matchingFunds + combinedFees;
 
-  const fundContractDisabled = Number(contractBalance) >= Number(totalDue);
+  const fundContractDisabled = Number(amountFundedInUnits) >= Number(totalDue);
+  const tokenBalanceInUSD = data?.fundedAmountInUsd;
 
-  const tokenBalanceInUSD =
-    balanceData?.value &&
-    data &&
-    !loading &&
-    !error &&
-    !isBalanceError &&
-    !isBalanceLoading &&
-    Number(balanceData?.formatted) * Number(data);
-
-  const {
-    data: matchingFundPayoutTokenBalance,
-    // isError,
-    // isFetched,
-  } = useBalance(tokenDetailUser);
+  const { data: matchingFundPayoutTokenBalance } = useBalance(tokenDetailUser);
 
   function handleFundContract() {
     // check if signer has enough token balance
     const accountBalance = matchingFundPayoutTokenBalance?.value;
     const tokenBalance = ethers.utils.parseUnits(
       amountToFund,
-      matchingFundPayoutToken?.decimal
+      matchingFundPayoutToken?.decimals
     );
 
     if (!accountBalance || BigNumber.from(tokenBalance).gt(accountBalance)) {
@@ -191,19 +289,24 @@ export default function FundContract(props: {
     setOpenConfirmationModal(true);
   }
 
-  if (props.round === undefined || isBalanceLoading || loading) {
+  if (props.round === undefined || isLoading) {
     return <Spinner text="Loading..." />;
   }
 
   const progressSteps = [
     {
-      name: "Submit",
-      description: "Finalize your funding",
+      name: "Token Approval",
+      description: "Approving token transfer.",
+      status: tokenApprovalStatus,
+    },
+    {
+      name: "Funding",
+      description: "Funding the round.",
       status: fundStatus,
     },
     {
       name: "Indexing",
-      description: "The subgraph is indexing the data.",
+      description: "Indexing the data.",
       status: indexingStatus,
     },
     {
@@ -224,56 +327,72 @@ export default function FundContract(props: {
       >
         Fund Contract
       </p>
-      <p className="font-bold text-sm">Contract Details</p>
+      <p className="font-bold text-sm">Details</p>
       <hr className="mt-2 mb-4" />
-      <p className="text-sm text-grey-400 mb-4">
-        You must fund the smart contract with the matching pool amount you
-        pledged during round creation or more if you choose. You can either fund
-        the contract through your connected wallet or send the funds directly to
-        the contract address.
-      </p>
+      {props.round.tags?.includes("allo-v1") && (
+        <p className="text-sm text-grey-400 mb-4">
+          You must fund the smart contract with the matching pool amount you
+          pledged during round creation or more if you choose. You can either
+          fund the contract through your connected wallet or send the funds
+          directly to the contract address.
+        </p>
+      )}
+      {props.round.tags?.includes("allo-v2") && (
+        <p className="text-sm text-grey-400 mb-4">
+          You must fund the round with the matching pool amount you pledged
+          during round creation or more if you choose. Fund the contract here
+          through your connected wallet.
+        </p>
+      )}
       <div className="flex flex-col mt-4 max-w-xl">
-        <div className="flex flex-row justify-start">
-          <p className="flex flex-row text-sm w-1/3">
-            Contract Address:
-            <span>
-              <InformationIcon
-                dataFor="contract-tooltip"
-                dataTestId="contract-tooltip"
-              />
-              <ReactTooltip
-                id="contract-tooltip"
-                place="bottom"
-                type="dark"
-                effect="solid"
-              >
-                <p className="text-xs">
-                  This is the contract address of your round's core
-                  <br />
-                  contract.
-                </p>
-              </ReactTooltip>
-            </span>
-          </p>
-          <p className="text-sm">{props.round?.id}</p>
-        </div>
+        {props.round.tags?.includes("allo-v1") && (
+          <div className="flex flex-row justify-start">
+            <p className="flex flex-row text-sm w-1/3">
+              Contract Address:
+              <span>
+                <InformationIcon
+                  dataFor="contract-tooltip"
+                  dataTestId="contract-tooltip"
+                />
+                <ReactTooltip
+                  id="contract-tooltip"
+                  place="bottom"
+                  type="dark"
+                  effect="solid"
+                >
+                  <p className="text-xs">
+                    This is the contract address of your round's core
+                    <br />
+                    contract.
+                  </p>
+                </ReactTooltip>
+              </span>
+            </p>
+            <p className="text-sm">{props.round?.id}</p>
+          </div>
+        )}
         <div className="flex flex-row justify-start mt-6">
           <p className="text-sm w-1/3">Payout token:</p>
           <p className="flex flex-row text-sm">
-            {matchingFundPayoutToken?.logo ? (
+            {matchingFundPayoutToken?.icon ? (
               <img
-                src={matchingFundPayoutToken.logo}
+                src={stringToBlobUrl(matchingFundPayoutToken.icon)}
                 alt=""
                 className="h-6 w-6 flex-shrink-0 rounded-full"
               />
             ) : null}
-            <span className="ml-2 pt-0.5">{matchingFundPayoutToken?.name}</span>
+            <span className="ml-2 pt-0.5">{matchingFundPayoutToken?.code}</span>
           </p>
         </div>
         <div className="flex flex-row justify-start mt-6">
           <p className="text-sm w-1/3">Matching pool size:</p>
           <p className="text-sm">
-            {matchingFunds.toFixed(2)} {matchingFundPayoutToken?.name}{" "}
+            {matchingFunds
+              ?.toLocaleString(undefined, {
+                minimumFractionDigits: 5,
+              })
+              .replace(/\.?0+$/, "")}{" "}
+            {matchingFundPayoutToken?.code}{" "}
             {matchingFundsInUSD && matchingFundsInUSD > 0 ? (
               <span className="text-sm text-slate-400 ml-2">
                 ${matchingFundsInUSD.toFixed(2)} USD
@@ -282,7 +401,7 @@ export default function FundContract(props: {
           </p>
         </div>
         <div className="flex flex-row justify-start mt-6">
-          <p className="flex flex-row text-sm w-1/3">
+          <div className="flex flex-row text-sm w-1/3">
             Protocol fee:
             <span>
               <InformationIcon
@@ -308,11 +427,11 @@ export default function FundContract(props: {
                 </p>
               </ReactTooltip>
             </span>
-          </p>
+          </div>
           <p className="text-sm">{protocolFeePercentage}%</p>
         </div>
         <div className="flex flex-row justify-start mt-6">
-          <p className="flex flex-row text-sm w-1/3">
+          <div className="flex flex-row text-sm w-1/3">
             Round fee:
             <span>
               <InformationIcon
@@ -325,7 +444,7 @@ export default function FundContract(props: {
                 type="dark"
                 effect="solid"
               >
-                <p className="text-xs">
+                <div className="text-xs">
                   The round fees are any additional charges
                   <br />
                   for services used to run your round. These
@@ -335,116 +454,104 @@ export default function FundContract(props: {
                   or other specialty tools. If enabled, they are
                   <br />
                   calculated as a percentage of your funding pool.
-                </p>
+                </div>
               </ReactTooltip>
             </span>
-          </p>
+          </div>
           <p className="text-sm">{props.round.roundFeePercentage ?? 0}%</p>
         </div>
         <hr className="mt-6 mb-6" />
-        {!props.round.payoutStrategy.isReadyForPayout ? (
-          <>
-            <div className="flex flex-row justify-start mt-6">
-              <p className="text-sm w-1/3">Amount in contract:</p>
-              <p className="text-sm">
-                {Number(contractBalance).toFixed(2)}{" "}
-                {matchingFundPayoutToken?.name}{" "}
-                {tokenBalanceInUSD && Number(tokenBalanceInUSD) > 0 ? (
-                  <span className="text-sm text-slate-400 ml-2">
-                    ${tokenBalanceInUSD.toFixed(2)} USD
-                  </span>
-                ) : null}
-              </p>
-            </div>
-            <div className="flex flex-row justify-start mt-6">
-              <p className="text-sm w-1/3">Amount left to fund:</p>
-              <p className="text-sm">
-                {" "}
-                {totalAmountLeftToFund} {matchingFundPayoutToken?.name}{" "}
-                {amountLeftToFundInUSD > 0 ? (
-                  <span className="text-sm text-slate-400 ml-2">
-                    ${amountLeftToFundInUSD.toFixed(2)} USD
-                  </span>
-                ) : null}
-              </p>
-            </div>
-            <div className="flex flex-row justify-start mt-6">
-              <p className="text-sm w-1/3 py-3">Amount to fund:</p>
-              {/* todo: update input with a max selector at right of input */}
-              <input
-                disabled={fundContractDisabled}
-                className="border border-gray-300 rounded-md p-2 w-1/2"
-                placeholder={`${
-                  fundContractDisabled
-                    ? "Contract is fully funded"
-                    : "Enter the amount you wish to fund"
-                }`}
-                value={amountToFund}
-                onChange={(e) => setAmountToFund(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-row justify-start mt-6">
-              <button
-                disabled={fundContractDisabled}
-                className={classNames(
-                  `bg-violet-400 hover:bg-violet-700 text-white py-2 px-4 rounded ${
-                    fundContractDisabled
-                      ? "cursor-not-allowed"
-                      : "cursor-pointer"
-                  }`
-                )}
-                data-testid="fund-contract-btn"
-                onClick={() => handleFundContract()}
-              >
-                Fund Contract
-              </button>
-              <button
-                className="bg-white hover:text-violet-700 hover:border-violet-700 text-gray py-2 px-4 rounded border border-gray ml-4"
-                data-testid="view-contract-btn"
-                onClick={() =>
-                  window.open(
-                    getTxExplorerForContract(chainId, props.roundId as string),
-                    "_blank"
-                  )
-                }
-              >
-                View Contract
-              </button>
-            </div>
-            {insufficientBalance && (
-              <p
-                data-testid="insufficientBalance"
-                className="rounded-md bg-red-50 py-2 text-pink-500 flex justify-center my-4 text-sm"
-              >
-                <InformationCircleIcon className="w-4 h-4 mr-1 mt-0.5" />
-                <span>
-                  You do not have enough funds for funding the matching pool.
+        <>
+          <div className="flex flex-row justify-start mt-6">
+            <p className="text-sm w-1/3">Amount funded:</p>
+            <p className="text-sm">
+              {amountFundedInUnits} {matchingFundPayoutToken?.code}{" "}
+              {tokenBalanceInUSD && Number(tokenBalanceInUSD) > 0 ? (
+                <span className="text-sm text-slate-400 ml-2">
+                  ${tokenBalanceInUSD.toFixed(2)} USD
                 </span>
-              </p>
-            )}
-            <FundContractModals />
-          </>
-        ) : (
-          <div>
-            <p className="text-sm text-grey-400 mb-4">
-              {" "}
-              Round has been finalized and funds have been moved to the payout
-              contract.
+              ) : null}
             </p>
+          </div>
+          <div className="flex flex-row justify-start mt-6">
+            <p className="text-sm w-1/3">Amount left to fund:</p>
+            <p className="text-sm">
+              {" "}
+              {totalAmountLeftToFund
+                ?.toLocaleString(undefined, {
+                  minimumFractionDigits: 5,
+                })
+                .replace(/\.?0+$/, "")}{" "}
+              {matchingFundPayoutToken?.code}{" "}
+              {amountLeftToFundInUSD !== undefined &&
+              amountLeftToFundInUSD > 0 ? (
+                <span className="text-sm text-slate-400 ml-2">
+                  ${amountLeftToFundInUSD.toFixed(2)} USD
+                </span>
+              ) : null}
+            </p>
+          </div>
+          <div className="flex flex-row justify-start mt-6">
+            <p className="text-sm w-1/3 py-3">Amount to fund:</p>
+            {/* todo: update input with a max selector at right of input */}
+            <input
+              disabled={fundContractDisabled}
+              className="border border-gray-300 rounded-md p-2 w-1/2"
+              placeholder={`${
+                fundContractDisabled
+                  ? "Contract is fully funded"
+                  : "Enter the amount you wish to fund"
+              }`}
+              value={amountToFund}
+              onChange={(e) => setAmountToFund(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-row justify-start mt-6">
             <button
               disabled={fundContractDisabled}
               className={classNames(
-                `${
-                  fundContractDisabled ? "bg-violet-400" : "bg-violet-200"
-                } text-white py-2 px-4 rounded`
+                `bg-violet-400 hover:bg-violet-700 text-white py-2 px-4 rounded ${
+                  fundContractDisabled
+                    ? "cursor-not-allowed"
+                    : "cursor-pointer"
+                }`
               )}
               data-testid="fund-contract-btn"
               onClick={() => handleFundContract()}
             >
               Fund Contract
             </button>
+            {props.round.tags?.includes("allo-v1") && (
+              <button
+                className="bg-white hover:text-violet-700 hover:border-violet-700 text-gray py-2 px-4 rounded border border-gray ml-4"
+                data-testid="view-contract-btn"
+                onClick={() =>
+                  window.open(
+                    getTxExplorerForContract(
+                      chainId!,
+                      props.roundId as string
+                    ),
+                    "_blank"
+                  )
+                }
+              >
+                View Contract
+              </button>
+            )}
           </div>
-        )}
+          {insufficientBalance && (
+            <div
+              data-testid="insufficientBalance"
+              className="rounded-md bg-red-50 py-2 text-pink-500 flex justify-center my-4 text-sm"
+            >
+              <InformationCircleIcon className="w-4 h-4 mr-1 mt-0.5" />
+              <span>
+                You do not have enough funds for funding the matching pool.
+              </span>
+            </div>
+          )}
+          <FundContractModals />
+        </>
       </div>
     </div>
   );
@@ -494,7 +601,7 @@ export default function FundContract(props: {
   function ConfirmationModalBody() {
     const amountInUSD =
       Number(
-        parseFloat(amountToFund).toFixed(matchingFundPayoutToken?.decimal)
+        parseFloat(amountToFund).toFixed(matchingFundPayoutToken?.decimals)
       ) * Number(data);
     return (
       <div>
@@ -503,7 +610,7 @@ export default function FundContract(props: {
             AMOUNT TO BE FUNDED
           </div>
           <div className="font-bold mb-1">
-            {amountToFund} {matchingFundPayoutToken?.name}
+            {amountToFund} {matchingFundPayoutToken?.code}
           </div>
           {amountInUSD > 0 ? (
             <div className="text-md text-slate-400 mb-6">
@@ -525,19 +632,57 @@ export default function FundContract(props: {
   }
 
   async function handleSubmitFund() {
+    if (
+      props.roundId === undefined ||
+      allo === null ||
+      matchingFundPayoutToken === undefined
+    ) {
+      return;
+    }
     try {
       setTimeout(() => {
         setOpenProgressModal(true);
       }, errorModalDelayMs);
 
+      let tokenAllowance = BigNumber.from(0);
+
+      let requireTokenApproval = false;
+
+      const amount = ethers.utils.parseUnits(
+        amountToFund.toString(),
+        matchingFundPayoutToken.decimals
+      );
+
+      const alloVersion = props.round?.tags?.includes("allo-v2") ? "v2" : "v1";
+      const roundAddress =
+        alloVersion === "v1" ? props.round?.id : getAlloAddress(chainId!);
+
+      if (
+        matchingFundPayoutToken?.address !== undefined &&
+        matchingFundPayoutToken?.address !== zeroAddress &&
+        signer
+      ) {
+        const erc20 = Erc20__factory.connect(
+          matchingFundPayoutToken?.address,
+          signer
+        );
+        tokenAllowance = await erc20.allowance(
+          address as string,
+          roundAddress as string
+        );
+        if (tokenAllowance.lt(amount)) {
+          requireTokenApproval = true;
+        }
+      }
+
       await fundContract({
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        roundId: props.roundId!,
+        allo,
+        roundId: props.roundId,
         fundAmount: Number(
-          parseFloat(amountToFund).toFixed(matchingFundPayoutToken?.decimal)
+          parseFloat(amountToFund).toFixed(matchingFundPayoutToken.decimals)
         ),
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        payoutToken: matchingFundPayoutToken!,
+        payoutToken: matchingFundPayoutToken,
+        requireTokenApproval,
       });
     } catch (error) {
       if (error === Logger.errors.TRANSACTION_REPLACED) {

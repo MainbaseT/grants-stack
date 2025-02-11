@@ -4,6 +4,28 @@ import { EditQuestion } from "../../api/types";
 import AddQuestionModal from "../AddQuestionModal";
 
 jest.mock("../../api/round");
+jest.mock("../../../features/common/Auth", () => ({
+  useWallet: () => mockWallet,
+}));
+jest.mock("wagmi", () => ({
+  useAccount: () => ({
+    chainId: 1,
+  }),
+}));
+
+const mockWallet = {
+  address: "0x0",
+  provider: { getNetwork: () => Promise.resolve({ chainId: "1" }) },
+  signer: {
+    getChainId: () => {
+      /* do nothing.*/
+    },
+  },
+  chain: {
+    id: 1,
+    name: "Ethereum",
+  },
+};
 
 const editQuestion: EditQuestion = {
   index: 0,

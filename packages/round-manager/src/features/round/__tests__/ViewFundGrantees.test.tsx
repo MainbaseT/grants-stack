@@ -4,7 +4,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ethers } from "ethers";
 import { act } from "react-dom/test-utils";
 import { useParams } from "react-router-dom";
-import { useBalance, useDisconnect, useSwitchNetwork } from "wagmi";
+import * as wagmi from "wagmi";
+import { UseBalanceReturnType } from "wagmi";
 import {
   makeRoundData,
   wrapWithBulkUpdateGrantApplicationContext,
@@ -12,17 +13,27 @@ import {
   wrapWithRoundContext,
 } from "../../../test-utils";
 import * as merklePayoutStrategy from "../../api/payoutStrategy/payoutStrategy";
-import * as roundTs from "../../api/round";
 import { MatchingStatsData, ProgressStatus, Round } from "../../api/types";
 import ViewFundGrantees from "../ViewFundGrantees";
 import { faker } from "@faker-js/faker";
 import { parseEther } from "ethers/lib/utils";
 
 jest.mock("../../common/Auth");
-jest.mock("wagmi");
+jest.mock("wagmi", () => ({
+  useBalance: jest.fn(),
+  useSwitchChain: () => ({
+    switchChain: jest.fn(),
+  }),
+  useDisconnect: jest.fn(),
+  useAccount: () => ({
+    chainId: 1,
+  }),
+  createConfig: jest.fn(),
+}));
 
 jest.mock("@rainbow-me/rainbowkit", () => ({
   ConnectButton: jest.fn(),
+  connectorsForWallets: jest.fn(),
 }));
 
 Object.assign(navigator, {
@@ -48,24 +59,17 @@ jest.mock("../../common/Auth", () => ({
   }),
 }));
 
-const useFetchMatchingDistributionFromContractMock = jest.spyOn(
-  merklePayoutStrategy,
-  "useFetchMatchingDistributionFromContract"
-);
+jest.mock("common", () => ({
+  ...jest.requireActual("common"),
+  useAllo: jest.fn(),
+}));
 
 const useGroupProjectsByPaymentStatusMock = jest.spyOn(
   merklePayoutStrategy,
   "useGroupProjectsByPaymentStatus"
 );
 
-const fetchMatchingDistributionMock = jest.spyOn(
-  roundTs,
-  "fetchMatchingDistribution"
-);
-
 describe("View Fund Grantees", () => {
-  // TODO: check default values in base.
-  // I've added them to avoid typescript errors.
   const matchingStatsData: MatchingStatsData[] = [
     {
       index: 0,
@@ -126,19 +130,7 @@ describe("View Fund Grantees", () => {
   ];
 
   beforeEach(() => {
-    useFetchMatchingDistributionFromContractMock.mockReturnValue({
-      distributionMetaPtr: "some-meta-ptr",
-      matchingDistributionContract: matchingStatsData,
-      isLoading: false,
-      isError: false,
-    });
-
-    fetchMatchingDistributionMock.mockReturnValue(
-      Promise.resolve({
-        distributionMetaPtr: "some-meta-ptr",
-        matchingDistribution: matchingStatsData,
-      })
-    );
+    jest.clearAllMocks(); // Clear previous mocks
 
     useGroupProjectsByPaymentStatusMock.mockReturnValue({
       paid: [matchingStatsData[0], matchingStatsData[1]],
@@ -146,27 +138,12 @@ describe("View Fund Grantees", () => {
       all: matchingStatsData,
     });
 
-    (useParams as jest.Mock).mockImplementation(() => {
-      return {
-        id: mockRoundData.id,
-      };
-    });
-
-    (useSwitchNetwork as jest.Mock).mockReturnValue({ chains: [] });
-    (useDisconnect as jest.Mock).mockReturnValue({});
-    (useParams as jest.Mock).mockReturnValueOnce({
-      id: undefined,
+    (useParams as jest.Mock).mockReturnValue({
+      id: mockRoundData.id,
     });
   });
 
   it("displays non-finalized status when round is not finalized", () => {
-    useFetchMatchingDistributionFromContractMock.mockReturnValue({
-      distributionMetaPtr: "some-meta-ptr",
-      matchingDistributionContract: [],
-      isLoading: false,
-      isError: false,
-    });
-
     render(
       wrapWithBulkUpdateGrantApplicationContext(
         wrapWithReadProgramContext(
@@ -189,10 +166,6 @@ describe("View Fund Grantees", () => {
   });
 
   it("displays finalized status when round is finalized", async () => {
-    (useParams as jest.Mock).mockReturnValueOnce({
-      id: undefined,
-    });
-
     await act(async () => {
       render(
         wrapWithBulkUpdateGrantApplicationContext(
@@ -274,14 +247,15 @@ describe("View Fund Grantees", () => {
     });
 
     it("Should show the confirmation modal and close on cancel", async () => {
-      (useBalance as jest.Mock).mockImplementation(() => ({
+      (wagmi.useBalance as jest.Mock).mockReturnValue({
         data: { formatted: "0", value: ethers.utils.parseEther("1000") },
         error: null,
         loading: false,
-      }));
+      } as unknown as UseBalanceReturnType<unknown>);
+
       await act(async () => {
         const checkboxes = screen.queryAllByTestId("project-checkbox");
-        checkboxes[0].click();
+        fireEvent.click(checkboxes[0]);
       });
 
       await act(async () => {
@@ -300,11 +274,14 @@ describe("View Fund Grantees", () => {
     });
 
     it("Should show the progress modal", async () => {
-      (useBalance as jest.Mock).mockImplementation(() => ({
-        data: { formatted: "0", value: ethers.utils.parseEther("1000") },
-        error: null,
-        loading: false,
-      }));
+      jest.spyOn(wagmi, "useBalance").mockImplementation(
+        () =>
+          ({
+            data: { formatted: "0", value: ethers.utils.parseEther("1000") },
+            error: null,
+            loading: false,
+          }) as unknown as UseBalanceReturnType<unknown>
+      );
       await act(async () => {
         const checkboxes = screen.queryAllByTestId("project-checkbox");
         checkboxes[0].click();
@@ -324,14 +301,17 @@ describe("View Fund Grantees", () => {
     });
 
     it("Should show the warning when not enough funds in contract", async () => {
-      (useBalance as jest.Mock).mockImplementation(() => ({
-        data: { formatted: "0", value: "0" },
-        error: null,
-        loading: false,
-      }));
+      jest.spyOn(wagmi, "useBalance").mockImplementation(
+        () =>
+          ({
+            data: { formatted: "0", value: "0" },
+            error: null,
+            loading: false,
+          }) as unknown as UseBalanceReturnType<unknown>
+      );
       await act(async () => {
         const checkboxes = screen.queryAllByTestId("project-checkbox");
-        checkboxes[0].click();
+        fireEvent.click(checkboxes[0]);
       });
 
       await act(async () => {
@@ -369,7 +349,8 @@ describe("View Fund Grantees", () => {
         );
       });
     });
-    it("displays paid projects section on clicking paid grantees tab", async () => {
+
+    it("displays paid projects section & table headers on clicking paid grantees tab", async () => {
       await act(async () => {
         const paidGranteesTab = screen.getByText("Paid Grantees");
         fireEvent.click(paidGranteesTab);
@@ -390,7 +371,7 @@ describe("View Fund Grantees", () => {
       ).toBeInTheDocument();
     });
 
-    it("displays exact list of projects in table which have been paid", async () => {
+    it("displays exact list of paid projects in table", async () => {
       await act(async () => {
         const paidGranteesTab = screen.getByText("Paid Grantees");
         fireEvent.click(paidGranteesTab);

@@ -4,12 +4,20 @@ import { faker } from "@faker-js/faker";
 import { RoundDetailForm } from "../RoundDetailForm";
 import ApplicationEligibilityForm from "../ApplicationEligibilityForm";
 import { RoundApplicationForm } from "../RoundApplicationForm";
-import { useWallet } from "../../common/Auth";
 import * as FormWizardImport from "../../common/FormWizard";
 import { fireEvent, screen } from "@testing-library/react";
 import QuadraticFundingForm from "../QuadraticFundingForm";
 import { DataLayer, DataLayerProvider } from "data-layer";
-
+jest.mock("wagmi", () => ({
+  useAccount: () => ({
+    chainId: 1,
+  }),
+  createConfig: jest.fn(),
+}));
+jest.mock("@rainbow-me/rainbowkit", () => ({
+  ConnectButton: jest.fn(),
+  connectorsForWallets: jest.fn(),
+}));
 jest.mock("../../common/Navbar");
 jest.mock("../../common/Auth");
 const formWizardSpy = jest.spyOn(FormWizardImport, "FormWizard");
@@ -26,13 +34,7 @@ jest.mock("react-router-dom", () => ({
 }));
 
 describe("<CreateRoundPage />", () => {
-  beforeEach(() => {
-    (useWallet as jest.Mock).mockReturnValue({
-      chain: {},
-      address: "0x0",
-      provider: { getNetwork: () => ({ chainId: "0x0" }) },
-    });
-  });
+  beforeEach(() => {});
 
   it("sends program to form wizard", () => {
     const programs = [makeProgramData({ id: programId })];

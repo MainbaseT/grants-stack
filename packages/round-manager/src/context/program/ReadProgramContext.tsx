@@ -1,20 +1,17 @@
-import {
-  Program,
-  ProgressStatus,
-  Web3Instance,
-} from "../../features/api/types";
+import { Program, ProgressStatus } from "../../features/api/types";
 import React, { createContext, useContext, useEffect, useReducer } from "react";
-import { useWallet } from "../../features/common/Auth";
 import { getProgramById, listPrograms } from "../../features/api/program";
 import { datadogLogs } from "@datadog/browser-logs";
-import { Web3Provider } from "@ethersproject/providers";
 import { DataLayer, useDataLayer } from "data-layer";
+import { useAlloVersion } from "common/src/components/AlloVersionSwitcher";
+import { useAccount } from "wagmi";
 
 export interface ReadProgramState {
   programs: Program[];
   fetchProgramsStatus: ProgressStatus;
   listProgramsError?: Error;
   getProgramByIdError?: Error;
+  chainId?: number;
 }
 
 enum ActionType {
@@ -47,7 +44,7 @@ const fetchProgramsByAddress = async (
   dispatch: Dispatch,
   address: string,
   dataLayer: DataLayer,
-  walletProvider: Web3Instance["provider"]
+  chainId: number
 ) => {
   datadogLogs.logger.info(`fetchProgramsByAddress: address - ${address}`);
 
@@ -56,7 +53,7 @@ const fetchProgramsByAddress = async (
     payload: ProgressStatus.IN_PROGRESS,
   });
   try {
-    const programs = await listPrograms(address, walletProvider, dataLayer);
+    const programs = await listPrograms(address, chainId, dataLayer);
     dispatch({ type: ActionType.SET_PROGRAMS, payload: programs });
     dispatch({
       type: ActionType.SET_FETCH_PROGRAM_STATUS,
@@ -79,7 +76,7 @@ const fetchProgramsById = async (
   address: string,
   programId: string,
   dataLayer: DataLayer,
-  walletProvider: Web3Provider
+  chainId: number
 ) => {
   datadogLogs.logger.info(`fetchProgramsById: programId - ${programId}`);
 
@@ -88,7 +85,7 @@ const fetchProgramsById = async (
     payload: ProgressStatus.IN_PROGRESS,
   });
   try {
-    const program = await getProgramById(programId, walletProvider, dataLayer);
+    const program = await getProgramById(programId, chainId, dataLayer);
     dispatch({ type: ActionType.SET_PROGRAMS, payload: [program] });
     dispatch({
       type: ActionType.SET_FETCH_PROGRAM_STATUS,
@@ -152,17 +149,19 @@ export const usePrograms = (): ReadProgramState & { dispatch: Dispatch } => {
     throw new Error("usePrograms must be used within a ProgramProvider");
   }
 
-  const { address, provider: walletProvider } = useWallet();
+  const { address, chainId } = useAccount();
   const dataLayer = useDataLayer();
 
   useEffect(() => {
-    fetchProgramsByAddress(
-      context.dispatch,
-      address.toLowerCase(),
-      dataLayer,
-      walletProvider
-    );
-  }, [address, walletProvider]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (chainId && address) {
+      fetchProgramsByAddress(
+        context.dispatch,
+        address.toLowerCase(),
+        dataLayer,
+        chainId
+      );
+    }
+  }, [address, chainId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { ...context.state, dispatch: context.dispatch };
 };
@@ -175,12 +174,13 @@ export const useProgramById = (
   getProgramByIdError?: Error;
 } => {
   const context = useContext(ReadProgramContext);
+  const { switchToVersion, version } = useAlloVersion();
   const dataLayer = useDataLayer();
   if (context === undefined) {
     throw new Error("useProgramById must be used within a ProgramProvider");
   }
 
-  const { address, provider: walletProvider } = useWallet();
+  const { address, chainId } = useAccount();
 
   useEffect(() => {
     if (id) {
@@ -188,20 +188,28 @@ export const useProgramById = (
         (program) => program.id === id
       );
 
-      if (!existingProgram) {
+      if (!existingProgram && chainId && address) {
         fetchProgramsById(
           context.dispatch,
           address.toLowerCase(),
           id,
           dataLayer,
-          walletProvider
+          chainId
         );
       }
     }
-  }, [id, walletProvider]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, chainId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const program = context.state.programs.find((program) => program.id === id);
+
+  useEffect(() => {
+    if (program?.tags?.includes("allo-v2") && version === "allo-v1") {
+      switchToVersion("allo-v2");
+    }
+  }, [program, switchToVersion, version]);
 
   return {
-    program: context.state.programs.find((program) => program.id === id),
+    program: program,
     fetchProgramsStatus: context.state.fetchProgramsStatus,
     getProgramByIdError: context.state.getProgramByIdError,
   };
